@@ -1,0 +1,22 @@
+# Seeded by Home Manager only when ~/.codex/config.toml does not exist.
+# After first activation, Codex can freely edit the live file.
+
+# YOLO mode: equivalent to --dangerously-bypass-approvals-and-sandbox.
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[tui]
+# Footer items supported by codex-cli 0.144.4:
+# - five-hour-limit / weekly-limit: account limit usage
+# - context-used: current context usage percentage
+# - used-tokens: current session token count
+# - context-window-size: model context window size
+status_line = [
+  "model-with-reasoning",
+  "five-hour-limit",
+  "weekly-limit",
+  "context-used",
+  "used-tokens",
+  "context-window-size",
+  "current-dir",
+]

@@ -1,4 +1,4 @@
-{ pkgs, unstable, ... }:
+{ lib, pkgs, unstable, ... }:
 
 {
   home.username = "neraverin";
@@ -27,33 +27,32 @@
     EDITOR = "vim";
   };
 
-  home.file.".codex/config.toml" = {
-    force = true;
-    text = ''
-      approval_policy = "never"
-      sandbox_mode = "danger-full-access"
+  home.activation.seedCodexConfig = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    config="$HOME/.codex/config.toml"
 
-      [projects."/home/neraverin/sources/dotfiles"]
-      trust_level = "trusted"
-    '';
-  };
+    if [ ! -e "$config" ]; then
+      mkdir -p "$(dirname "$config")"
+      cp ${./codex/config.toml} "$config"
+      chmod u+w "$config"
+    fi
+  '';
 
-  home.file.".claude/settings.json" = {
-    force = true;
-    text = builtins.toJSON {
-      "$schema" = "https://json.schemastore.org/claude-code-settings.json";
-      theme = "dark";
-      model = "sonnet[1m]";
-      permissions = {
-        defaultMode = "bypassPermissions";
-        skipDangerousModePermissionPrompt = true;
-      };
-      statusLine = {
-        type = "command";
-        command = "bash /home/neraverin/.claude/statusline-command.sh";
-      };
-    };
-  };
+  home.activation.seedClaudeConfig = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    settings="$HOME/.claude/settings.json"
+    statusline="$HOME/.claude/statusline-command.sh"
+
+    if [ ! -e "$settings" ]; then
+      mkdir -p "$(dirname "$settings")"
+      cp ${./claude/settings.json} "$settings"
+      chmod u+w "$settings"
+    fi
+
+    if [ ! -e "$statusline" ]; then
+      mkdir -p "$(dirname "$statusline")"
+      cp ${./claude/statusline-command.sh} "$statusline"
+      chmod u+wx "$statusline"
+    fi
+  '';
 
   programs.home-manager.enable = true;
 
