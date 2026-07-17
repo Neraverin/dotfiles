@@ -7,15 +7,20 @@
 
   home.packages = with pkgs; [
     bat
+    claude-code
+    codex
     curl
     fd
     git
+    glances
     htop
     jq
+    procs
     ripgrep
     tree
     unzip
     wget
+    witr
   ];
 
   home.sessionVariables = {
