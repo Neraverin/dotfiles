@@ -2,6 +2,7 @@
 set -euo pipefail
 
 config_name="${CONFIG_NAME:-neraverin@work-wsl}"
+backup_ext="${BACKUP_EXT:-backup}"
 
 if [[ ! -f flake.nix ]]; then
   echo "activate.sh must be run from the dotfiles repository root." >&2
@@ -14,4 +15,4 @@ if ! command -v nix >/dev/null 2>&1; then
 fi
 
 nix build ".#homeConfigurations.\"${config_name}\".activationPackage"
-"./result/activate"
+HOME_MANAGER_BACKUP_EXT="${backup_ext}" "./result/activate"

@@ -49,6 +49,29 @@
   programs.starship = {
     enable = true;
     enableBashIntegration = true;
+    settings = {
+      format = "$time $username $custom $all";
+
+      time = {
+        disabled = false;
+        format = "[$time]($style)";
+        time_format = "%H:%M";
+      };
+
+      username = {
+        show_always = true;
+        format = "[$user]($style)";
+        style_user = "#808080";
+        style_root = "red";
+      };
+
+      custom.nix = {
+        command = "printf Nix";
+        format = "[$output]($style)";
+        style = "bold blue";
+        when = "true";
+      };
+    };
   };
 
   programs.vim = {
