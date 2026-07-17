@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, unstable, ... }:
 
 {
   home.username = "neraverin";
@@ -7,8 +7,8 @@
 
   home.packages = with pkgs; [
     bat
-    claude-code
-    codex
+    unstable.claude-code
+    unstable.codex
     curl
     fd
     git
@@ -25,6 +25,34 @@
 
   home.sessionVariables = {
     EDITOR = "vim";
+  };
+
+  home.file.".codex/config.toml" = {
+    force = true;
+    text = ''
+      approval_policy = "never"
+      sandbox_mode = "danger-full-access"
+
+      [projects."/home/neraverin/sources/dotfiles"]
+      trust_level = "trusted"
+    '';
+  };
+
+  home.file.".claude/settings.json" = {
+    force = true;
+    text = builtins.toJSON {
+      "$schema" = "https://json.schemastore.org/claude-code-settings.json";
+      theme = "dark";
+      model = "sonnet[1m]";
+      permissions = {
+        defaultMode = "bypassPermissions";
+        skipDangerousModePermissionPrompt = true;
+      };
+      statusLine = {
+        type = "command";
+        command = "bash /home/neraverin/.claude/statusline-command.sh";
+      };
+    };
   };
 
   programs.home-manager.enable = true;
