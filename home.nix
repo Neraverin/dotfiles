@@ -1,4 +1,4 @@
-{ lib, pkgs, unstable, ... }:
+{ herdr, lib, pkgs, unstable, ... }:
 
 {
   home.username = "neraverin";
@@ -13,6 +13,7 @@
     fd
     git
     glances
+    herdr
     htop
     jq
     procs
