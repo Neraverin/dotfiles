@@ -13,6 +13,8 @@
     fd
     git
     glances
+    go
+    gopls
     herdr
     htop
     jq
