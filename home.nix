@@ -9,6 +9,7 @@
     bat
     unstable.claude-code
     unstable.codex
+    unstable.openspec
     curl
     fd
     git
@@ -100,12 +101,6 @@
         style_root = "red";
       };
 
-      custom.nix = {
-        command = "printf Nix";
-        format = "[$output]($style)";
-        style = "bold blue";
-        when = "true";
-      };
     };
   };
 
