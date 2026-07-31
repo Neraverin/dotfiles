@@ -15,6 +15,7 @@
     git
     glances
     go
+    golangci-lint
     gopls
     herdr
     htop
