@@ -21,6 +21,7 @@
     jq
     procs
     ripgrep
+    shellcheck
     tree
     unzip
     wget
