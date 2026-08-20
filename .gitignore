@@ -10,3 +10,4 @@ result-*
 
 # Github push helping script
 push.sh
+pull.sh
