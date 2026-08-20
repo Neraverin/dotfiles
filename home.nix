@@ -20,6 +20,7 @@
     herdr
     htop
     jq
+    poppler-utils
     procs
     ripgrep
     shellcheck
