@@ -110,11 +110,6 @@
 
   programs.fzf.enable = true;
 
-  programs.git = {
-    enable = true;
-    settings.user.name = "neraverin";
-  };
-
   programs.starship = {
     enable = true;
     enableBashIntegration = true;
