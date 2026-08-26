@@ -20,6 +20,7 @@
     herdr
     htop
     jq
+    nerd-fonts.hack
     poppler-utils
     procs
     ripgrep
@@ -29,6 +30,12 @@
     wget
     witr
   ];
+
+  # Ubuntu's fontconfig does not look inside the Nix profile; this drops a config
+  # into ~/.config/fontconfig that points it there.
+  fonts.fontconfig.enable = true;
+
+  home.file.".config/wezterm/wezterm.lua".source = ../wezterm/wezterm.lua;
 
   home.sessionPath = [ "$HOME/.local/bin" ];
 

@@ -44,11 +44,7 @@
     in
     {
       homeConfigurations = {
-        # Servers and WSL: the base profile.
-        "neraverin@work-wsl" = mkHome ./home/common.nix;
-
-        # Graphical workstations: base profile plus desktop extras.
-        "neraverin@workstation" = mkHome ./home/workstation.nix;
+        "neraverin@server" = mkHome ./home/common.nix;
       };
     };
 }
