@@ -13,7 +13,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     -h|--help)
       cat <<'EOF'
-Usage: ./activate.sh [--force]
+Usage: ./activate-server.sh [--force]
+       ./activate-workstation.sh [--force]
+       CONFIG_NAME=<name> ./activate.sh [--force]
 
 Options:
   --force   Remove seeded Codex and Claude configs before activation so Home Manager restores them.

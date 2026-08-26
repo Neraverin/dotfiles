@@ -30,6 +30,8 @@
     witr
   ];
 
+  home.sessionPath = [ "$HOME/.local/bin" ];
+
   home.sessionVariables = {
     EDITOR = "vim";
   };
@@ -39,7 +41,7 @@
 
     if [ ! -e "$config" ]; then
       mkdir -p "$(dirname "$config")"
-      cp ${./codex/config.toml} "$config"
+      cp ${../codex/config.toml} "$config"
       chmod u+w "$config"
     fi
   '';
@@ -50,13 +52,13 @@
 
     if [ ! -e "$settings" ]; then
       mkdir -p "$(dirname "$settings")"
-      cp ${./claude/settings.json} "$settings"
+      cp ${../claude/settings.json} "$settings"
       chmod u+w "$settings"
     fi
 
     if [ ! -e "$statusline" ]; then
       mkdir -p "$(dirname "$statusline")"
-      cp ${./claude/statusline-command.sh} "$statusline"
+      cp ${../claude/statusline-command.sh} "$statusline"
       chmod u+wx "$statusline"
     fi
   '';

@@ -4,18 +4,28 @@ Nix + home-manager configuration for Linux/WSL development machines.
 
 ## Apply
 
-```sh
-./activate.sh
-```
-
-The activation script builds and activates the locked home-manager generation from this repository.
-Existing managed files are backed up with the `.backup` extension before Home Manager replaces them.
-
-To use another home-manager configuration from the flake:
+On a server or under WSL:
 
 ```sh
-CONFIG_NAME=neraverin@work-wsl ./activate.sh
+./activate-server.sh
 ```
+
+On a graphical workstation:
+
+```sh
+./activate-workstation.sh
+```
+
+Both are thin wrappers around `activate.sh`, which builds and activates the locked home-manager
+generation from this repository. Existing managed files are backed up with the `.backup` extension
+before Home Manager replaces them.
+
+## Profiles
+
+| Script | Configuration | Module | Use for |
+| --- | --- | --- | --- |
+| `activate-server.sh` | `neraverin@work-wsl` | `home/common.nix` | servers and WSL (base profile) |
+| `activate-workstation.sh` | `neraverin@workstation` | `home/workstation.nix` | graphical workstations; imports `home/common.nix` and adds WezTerm and GNOME input-source keybindings |
 
 To use another backup extension:
 
