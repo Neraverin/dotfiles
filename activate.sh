@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-config_name="${CONFIG_NAME:-neraverin@work-wsl}"
+config_name="${CONFIG_NAME:-neraverin@server}"
 backup_ext="${BACKUP_EXT:-backup}"
 force=false
 
@@ -14,7 +14,6 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       cat <<'EOF'
 Usage: ./activate-server.sh [--force]
-       ./activate-workstation.sh [--force]
        CONFIG_NAME=<name> ./activate.sh [--force]
 
 Options:

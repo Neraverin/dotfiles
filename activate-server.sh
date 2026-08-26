@@ -3,4 +3,4 @@
 set -euo pipefail
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
-CONFIG_NAME="neraverin@work-wsl" exec ./activate.sh "$@"
+CONFIG_NAME="neraverin@server" exec ./activate.sh "$@"
