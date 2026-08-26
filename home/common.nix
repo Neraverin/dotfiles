@@ -22,6 +22,7 @@
     htop
     jq
     yq
+    mc
     nerd-fonts.hack
     nil
     nixd
