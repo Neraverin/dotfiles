@@ -75,6 +75,22 @@
     fi
   '';
 
+  # DeaDBeeF from Nix links its own alsa-lib, which honours Ubuntu's ALSA config
+  # (pcm.!default = pipewire) but looks for libasound_module_pcm_pipewire.so
+  # inside its own store path, where no plugins ship. Its PulseAudio output goes
+  # straight to the pipewire-pulse socket and sidesteps ALSA entirely. Seeded
+  # only when unset, so a plugin picked in the GUI survives later activations.
+  home.activation.seedDeadbeefOutput = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    config="$HOME/.config/deadbeef/config"
+
+    mkdir -p "$(dirname "$config")"
+    touch "$config"
+
+    if ! grep -q '^output_plugin ' "$config"; then
+      echo "output_plugin pulseaudio" >> "$config"
+    fi
+  '';
+
   programs.home-manager.enable = true;
 
   programs.bash = {
