@@ -22,6 +22,7 @@
     jq
     yq
     nerd-fonts.hack
+    nil
     poppler-utils
     procs
     ripgrep
