@@ -11,6 +11,7 @@
     unstable.codex
     unstable.openspec
     curl
+    deadbeef
     fd
     git
     glances
@@ -23,6 +24,7 @@
     yq
     nerd-fonts.hack
     nil
+    nixd
     poppler-utils
     procs
     ripgrep
