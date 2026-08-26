@@ -20,6 +20,7 @@
     herdr
     htop
     jq
+    yq
     nerd-fonts.hack
     poppler-utils
     procs
