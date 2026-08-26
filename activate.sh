@@ -13,7 +13,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     -h|--help)
       cat <<'EOF'
-Usage: ./activate-server.sh [--force]
+Usage: ./activate.sh [--force]
        CONFIG_NAME=<name> ./activate.sh [--force]
 
 Options:
