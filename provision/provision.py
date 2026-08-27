@@ -132,6 +132,22 @@ def fetch(url: str, destination: Path) -> None:
         with destination.open("wb") as handle:
             shutil.copyfileobj(response, handle)
 
+    # A host-level scanner (IMA/EVM, or a corporate endpoint agent) can deny
+    # reads of a payload it dislikes, by content hash, after the write lands.
+    # The open fails with EPERM far away from here, so say what happened while
+    # the URL is still in hand.
+    try:
+        with destination.open("rb") as handle:
+            handle.read(1)
+    except PermissionError as error:
+        raise SystemExit(
+            f"{destination.name} downloaded but cannot be read back: {error.strerror}.\n"
+            f"  Source: {url}\n"
+            "  A local security policy is blocking this exact content — the download\n"
+            "  itself succeeded. Verify the checksum, then pin a different version or\n"
+            "  ask whoever runs endpoint security to allow it."
+        ) from error
+
 
 def fetch_text(url: str) -> str:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
