@@ -523,15 +523,49 @@ def resolve_archive_version(spec: dict) -> str:
     raise SystemExit("an archive entry needs either version or version_url")
 
 
+def write_desktop_entry(name: str, root: Path, entry: dict) -> str:
+    """Generate a .desktop file for an archive that ships none.
+
+    Upstream static builds are often just a binary and its data, with no
+    packaging metadata — DeaDBeeF's is. The launcher still has to exist, and
+    every path in it has to be absolute because nothing puts ~/.local/opt on
+    XDG_DATA_DIRS.
+    """
+    DESKTOP_DIR.mkdir(parents=True, exist_ok=True)
+    destination = DESKTOP_DIR / f"{name}.desktop"
+
+    fields = {
+        "Type": "Application",
+        "Name": entry.get("name", name),
+        "Exec": f"{find_binary(root, entry['exec'])} %U",
+        "Terminal": "false",
+    }
+    if entry.get("icon"):
+        icon = next((p for p in root.rglob(entry["icon"]) if p.is_file()), None)
+        if icon:
+            fields["Icon"] = str(icon)
+    for key in ("Comment", "Categories", "MimeType", "GenericName"):
+        if entry.get(key.lower()):
+            fields[key] = entry[key.lower()]
+
+    body = "\n".join(f"{k}={v}" for k, v in fields.items())
+    destination.write_text(f"[Desktop Entry]\n{body}\n")
+    return str(destination)
+
+
 def install_desktop_entries(name: str, root: Path, spec: dict) -> list[str]:
-    """Copy .desktop files out of an unpacked tree, absolutising Exec and Icon.
+    """Place .desktop files, absolutising Exec and Icon.
 
     Nix put these on XDG_DATA_DIRS through the profile; without a profile the
     entries have to land in ~/.local/share/applications and name full paths.
     """
+    desktop = spec.get("desktop")
+    if isinstance(desktop, dict):
+        return [write_desktop_entry(name, root, desktop)]
+
     placed = []
 
-    for relative in spec.get("desktop") or []:
+    for relative in desktop or []:
         source = root / relative
         if not source.exists():
             warn(f"{name}: {relative} is missing, no desktop entry installed")
