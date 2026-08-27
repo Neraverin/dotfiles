@@ -24,6 +24,7 @@
     yq
     mc
     nerd-fonts.hack
+    net-tools
     nil
     nixd
     poppler-utils
