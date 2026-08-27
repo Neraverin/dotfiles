@@ -1102,58 +1102,67 @@ def main() -> None:
 
     state = load_state()
 
-    if wanted("apt"):
-        sync_apt(merge_apt(common, gui), state, dry_run=args.dry_run, verbose=args.verbose)
-    if wanted("github"):
-        sync_github(
-            merge(common, gui, "github", {}),
-            state,
-            dry_run=args.dry_run,
-            upgrade=args.upgrade,
-        )
-    if wanted("archive"):
-        sync_archive(
-            merge(common, gui, "archive", {}),
-            state,
-            dry_run=args.dry_run,
-            upgrade=args.upgrade,
-        )
-    if wanted("npm"):
-        sync_npm(
-            merge(common, gui, "npm", []),
-            state,
-            dry_run=args.dry_run,
-            verbose=args.verbose,
-            upgrade=args.upgrade,
-        )
-    if wanted("go"):
-        sync_go(
-            merge(common, gui, "go", {}),
-            state,
-            dry_run=args.dry_run,
-            verbose=args.verbose,
-            upgrade=args.upgrade,
-        )
-    if wanted("fonts"):
-        sync_fonts(
-            merge(common, gui, "fonts", {}),
-            state,
-            dry_run=args.dry_run,
-            upgrade=args.upgrade,
-        )
-    if wanted("files"):
-        sync_files(
-            merge(common, gui, "files", {}),
-            merge(common, gui, "seeds", {}),
-            merge(common, gui, "lines", {}),
-            state,
-            dry_run=args.dry_run,
-        )
-    if wanted("shell"):
-        sync_shell(merge(common, gui, "shell", {}), dry_run=args.dry_run)
-
-    state["gui"] = want_gui
-    save_state(state, dry_run=args.dry_run)
+    # A section that aborts — an unreachable upstream, a failed apt — must not
+    # throw away the record of what the earlier sections already installed, or
+    # the next run would treat those as foreign and refuse to manage them.
+    try:
+        if wanted("apt"):
+            sync_apt(
+                merge_apt(common, gui),
+                state,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
+        if wanted("github"):
+            sync_github(
+                merge(common, gui, "github", {}),
+                state,
+                dry_run=args.dry_run,
+                upgrade=args.upgrade,
+            )
+        if wanted("archive"):
+            sync_archive(
+                merge(common, gui, "archive", {}),
+                state,
+                dry_run=args.dry_run,
+                upgrade=args.upgrade,
+            )
+        if wanted("npm"):
+            sync_npm(
+                merge(common, gui, "npm", []),
+                state,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+                upgrade=args.upgrade,
+            )
+        if wanted("go"):
+            sync_go(
+                merge(common, gui, "go", {}),
+                state,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+                upgrade=args.upgrade,
+            )
+        if wanted("fonts"):
+            sync_fonts(
+                merge(common, gui, "fonts", {}),
+                state,
+                dry_run=args.dry_run,
+                upgrade=args.upgrade,
+            )
+        if wanted("files"):
+            sync_files(
+                merge(common, gui, "files", {}),
+                merge(common, gui, "seeds", {}),
+                merge(common, gui, "lines", {}),
+                state,
+                dry_run=args.dry_run,
+            )
+        if wanted("shell"):
+            sync_shell(merge(common, gui, "shell", {}), dry_run=args.dry_run)
+    finally:
+        state["gui"] = want_gui
+        save_state(state, dry_run=args.dry_run)
 
     log("")
     verb = "would change" if args.dry_run else "changed"
