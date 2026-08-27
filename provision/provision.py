@@ -108,12 +108,13 @@ def sudo(cmd: list[str]) -> list[str]:
 
 
 def ensure_sudo(*, dry_run: bool) -> None:
-    """Take the sudo password now, while a prompt can still be seen.
+    """Take the sudo password now, while a prompt can still be answered.
 
     Every other command runs under capture_output, which swallows sudo's prompt
     while sudo still waits on /dev/tty — a silent hang with nothing on screen.
     Priming the timestamp here keeps the prompt visible and the later calls
-    non-interactive.
+    non-interactive. Over `ssh host ./migrate-from-nix.sh` there is no terminal
+    at all, so an askpass helper is the only way through.
     """
     if dry_run or os.geteuid() == 0:
         return
@@ -121,9 +122,23 @@ def ensure_sudo(*, dry_run: bool) -> None:
     if subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode == 0:
         return
 
-    detail("apt needs root; sudo will ask for your password")
-    if subprocess.run(["sudo", "-v"]).returncode != 0:
+    if sys.stdin.isatty():
+        detail("apt needs root; sudo will ask for your password")
+        if subprocess.run(["sudo", "-v"]).returncode == 0:
+            return
         raise SystemExit("sudo authentication failed")
+
+    if os.environ.get("SUDO_ASKPASS"):
+        detail("no terminal; asking sudo to use SUDO_ASKPASS")
+        if subprocess.run(["sudo", "-A", "-v"], capture_output=True).returncode == 0:
+            return
+        raise SystemExit("sudo authentication through SUDO_ASKPASS failed")
+
+    raise SystemExit(
+        "apt needs root, but there is no terminal to ask for a password on.\n"
+        "  Run this from an interactive shell, or point SUDO_ASKPASS at a helper,\n"
+        "  or prime the timestamp first with: sudo -v"
+    )
 
 
 def fetch(url: str, destination: Path) -> None:
