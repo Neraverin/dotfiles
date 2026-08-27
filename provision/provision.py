@@ -50,6 +50,7 @@ installed: list[str] = []
 removed: list[str] = []
 warnings: list[str] = []
 skipped = 0
+step_open = False
 
 
 # --------------------------------------------------------------------------- io
@@ -66,6 +67,53 @@ def detail(message: str) -> None:
 def warn(message: str) -> None:
     warnings.append(message)
     print(f"  warning: {message}")
+
+
+def note_warning(message: str) -> None:
+    """Record a warning whose text is already on the item's status line."""
+    warnings.append(message)
+
+
+def step_start(index: int, total: int, name: str) -> str:
+    """Open a numbered line for one item and leave it unfinished.
+
+    On a terminal the line reads "in progress" until step_end overwrites it, so
+    a long apt install shows which package it is on. Piped to a log there is no
+    cursor to rewrite, so the line is simply completed in place.
+    """
+    global step_open
+    step_open = True
+    label = f"  [{index}/{total}] {name}"
+    print(f"{label} ... in progress" if sys.stdout.isatty() else f"{label} ... ",
+          end="", flush=True)
+    return label
+
+
+def step_end(label: str, status: str) -> None:
+    global step_open
+    was_open, step_open = step_open, False
+
+    if not was_open:
+        # Command output was printed underneath, so repeat the item's name;
+        # a bare "done" several screens below its heading says nothing.
+        print(f"{label} ... {status}", flush=True)
+    elif sys.stdout.isatty():
+        # Pad to wipe whatever "in progress" left behind when status is shorter.
+        print(f"\r{label} ... {status}".ljust(len(label) + 20))
+    else:
+        print(status, flush=True)
+
+
+def break_step_line() -> None:
+    """Move off an unfinished step line before something else writes.
+
+    Only --verbose and a failing command print underneath an open item; both
+    would otherwise run into the trailing "... in progress".
+    """
+    global step_open
+    if step_open:
+        print(flush=True)
+        step_open = False
 
 
 def note_skip(count: int = 1) -> None:
@@ -91,11 +139,16 @@ def run(cmd: list[str], *, dry_run: bool, verbose: bool, check: bool = True) -> 
         return 0
 
     if verbose:
+        break_step_line()
+        # A child writes straight to fd 1; anything still sitting in Python's
+        # buffer would surface after it and land out of order.
+        sys.stdout.flush()
         return subprocess.run(cmd, check=check, env=child_env()).returncode
 
     result = subprocess.run(cmd, capture_output=True, text=True, env=child_env())
 
     if result.returncode != 0 and check:
+        break_step_line()
         detail(f"command failed: {' '.join(cmd)}")
         for line in (result.stdout + result.stderr).splitlines():
             detail(f"    {line}")
@@ -344,6 +397,13 @@ def dpkg_installed(package: str) -> bool:
     return result.stdout.startswith("install ok installed")
 
 
+def apt_version(package: str) -> str:
+    result = subprocess.run(
+        ["dpkg-query", "-W", "-f=${Version}", package], capture_output=True, text=True
+    )
+    return result.stdout.strip() or "unknown"
+
+
 def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> None:
     packages = desired.get("packages") or []
     links = desired.get("links") or {}
@@ -365,24 +425,54 @@ def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> Non
 
     if missing:
         run(sudo(["apt-get", "update"]), dry_run=dry_run, verbose=verbose)
-        run(
-            sudo(["apt-get", "install", "-y", *missing]),
-            dry_run=dry_run,
-            verbose=verbose,
-        )
-        for package in missing:
-            detail(f"{'would install' if dry_run else 'installed'}: {package}")
+
+    # One apt-get call per package. Slower than a single batched call — apt
+    # re-reads its state each time — but a batch is opaque: it either prints
+    # nothing for a minute or fails without saying which package broke.
+    for index, package in enumerate(missing, start=1):
+        if dry_run:
+            detail(f"[{index}/{len(missing)}] {package} ... would install")
             installed.append(package)
+            continue
 
-    if stale:
-        # Only packages this tool installed are ever removed; anything the
-        # distribution or the user brought in is left alone.
-        run(sudo(["apt-get", "remove", "-y", *stale]), dry_run=dry_run, verbose=verbose)
-        for package in stale:
-            detail(f"{'would remove' if dry_run else 'removed'}: {package}")
+        label = step_start(index, len(missing), package)
+        try:
+            run(
+                sudo(["apt-get", "install", "-y", package]),
+                dry_run=False,
+                verbose=verbose,
+            )
+        except SystemExit:
+            step_end(label, "failed")
+            raise
+        step_end(label, f"done ({apt_version(package)})")
+        installed.append(package)
+
+    # Only packages this tool installed are ever removed; anything the
+    # distribution or the user brought in is left alone.
+    for index, package in enumerate(stale, start=1):
+        if dry_run:
+            detail(f"[{index}/{len(stale)}] {package} ... would remove")
             removed.append(package)
+            continue
 
-    note_skip(len(packages) - len(missing))
+        label = step_start(index, len(stale), package)
+        try:
+            run(
+                sudo(["apt-get", "remove", "-y", package]),
+                dry_run=False,
+                verbose=verbose,
+            )
+        except SystemExit:
+            step_end(label, "failed")
+            raise
+        step_end(label, "removed")
+        removed.append(package)
+
+    current = len(packages) - len(missing)
+    if current:
+        detail(f"{current} already current")
+    note_skip(current)
 
     # Record only what we installed, so a package that predates this tool is
     # never treated as ours on a later run.
@@ -467,7 +557,8 @@ def format_asset(template: str, tag: str) -> str:
 
 def install_github(
     name: str, spec: dict, state: dict, *, dry_run: bool, upgrade: bool
-) -> None:
+) -> str:
+    """Install one release asset and return the status for its step line."""
     names = spec.get("binaries") or [spec["binary"]]
     known = state["github"].get(name)
     present = all((BIN_DIR / b).exists() for b in names)
@@ -475,29 +566,26 @@ def install_github(
     # Without --upgrade an installed tool is left alone, which keeps ordinary
     # runs offline and fast; the API is only consulted when something may change.
     if known and present and not upgrade:
-        detail(f"{name}: already at {known['version']}")
         note_skip()
-        return
+        return f"already at {known['version']}"
 
     try:
         tag = spec.get("version") or github_latest_tag(spec["repo"])
     except UpstreamUnavailable as error:
         if known:
-            warn(f"{name}: {error}; keeping {known['version']}")
-            return
+            note_warning(f"{name}: {error}; keeping {known['version']}")
+            return f"kept {known['version']} (upstream unavailable)"
         raise SystemExit(str(error)) from error
 
     asset = format_asset(spec["asset"], tag)
     url = f"https://github.com/{spec['repo']}/releases/download/{tag}/{asset}"
 
     if known and known["version"] == tag and present:
-        detail(f"{name}: already at {tag}")
         note_skip()
-        return
+        return f"already at {tag}"
 
     if dry_run:
-        detail(f"would fetch {name} {tag} from {url}")
-        return
+        return f"would fetch {tag} from {url}"
 
     with staging_area(BIN_DIR) as tmp:
         tmp_path = tmp
@@ -528,8 +616,8 @@ def install_github(
                 placed.append(str(destination))
 
     state["github"][name] = {"version": tag, "files": placed}
-    detail(f"{name}: installed {tag}")
     installed.append(name)
+    return f"done ({tag})"
 
 
 def sync_github(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> None:
@@ -538,8 +626,16 @@ def sync_github(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> 
 
     log("github releases")
 
-    for name, spec in desired.items():
-        install_github(name, spec, state, dry_run=dry_run, upgrade=upgrade)
+    for index, (name, spec) in enumerate(desired.items(), start=1):
+        label = step_start(index, len(desired), name)
+        try:
+            status = install_github(
+                name, spec, state, dry_run=dry_run, upgrade=upgrade
+            )
+        except SystemExit:
+            step_end(label, "failed")
+            raise
+        step_end(label, status)
 
     for name in [n for n in list(state["github"]) if n not in desired]:
         for path in state["github"][name]["files"]:
@@ -644,28 +740,27 @@ def install_desktop_entries(name: str, root: Path, spec: dict) -> list[str]:
 
 def install_archive(
     name: str, spec: dict, state: dict, *, dry_run: bool, upgrade: bool
-) -> None:
+) -> str:
+    """Install one tarball and return the status for its step line."""
     known = state["archive"].get(name)
     target = OPT_DIR / name
     present = target.exists() and all((BIN_DIR / b).exists() for b in spec["bin"])
 
     if known and present and not upgrade:
-        detail(f"{name}: already at {known['version']}")
         note_skip()
-        return
+        return f"already at {known['version']}"
 
     try:
         version = resolve_archive_version(spec)
     except UpstreamUnavailable as error:
         if known:
-            warn(f"{name}: {error}; keeping {known['version']}")
-            return
+            note_warning(f"{name}: {error}; keeping {known['version']}")
+            return f"kept {known['version']} (upstream unavailable)"
         raise SystemExit(str(error)) from error
 
     if known and known["version"] == version and present:
-        detail(f"{name}: already at {version}")
         note_skip()
-        return
+        return f"already at {version}"
 
     url = spec["url"].format(version=version, version_strip=version.lstrip("v"))
     archive_name = (spec.get("archive_name") or url.rsplit("/", 1)[-1]).format(
@@ -673,8 +768,7 @@ def install_archive(
     )
 
     if dry_run:
-        detail(f"would fetch {name} {version} from {url}")
-        return
+        return f"would fetch {version} from {url}"
 
     with staging_area(OPT_DIR) as tmp:
         payload = tmp / archive_name
@@ -700,8 +794,8 @@ def install_archive(
         "links": links,
         "desktop": install_desktop_entries(name, target, spec),
     }
-    detail(f"{name}: installed {version}")
     installed.append(name)
+    return f"done ({version})"
 
 
 def sync_archive(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> None:
@@ -710,8 +804,16 @@ def sync_archive(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) ->
 
     log("archives")
 
-    for name, spec in desired.items():
-        install_archive(name, spec, state, dry_run=dry_run, upgrade=upgrade)
+    for index, (name, spec) in enumerate(desired.items(), start=1):
+        label = step_start(index, len(desired), name)
+        try:
+            status = install_archive(
+                name, spec, state, dry_run=dry_run, upgrade=upgrade
+            )
+        except SystemExit:
+            step_end(label, "failed")
+            raise
+        step_end(label, status)
 
     for name in [n for n in list(state["archive"]) if n not in desired]:
         entry = state["archive"][name]
@@ -760,32 +862,42 @@ def sync_npm(
         warn("npm is not on PATH; skipping the npm section")
         return
 
-    for package in desired:
+    for index, package in enumerate(desired, start=1):
         current = npm_installed_version(package)
+        label = step_start(index, len(desired), package)
 
         if current and not upgrade:
-            detail(f"{package}: already at {current}")
+            step_end(label, f"already at {current}")
             note_skip()
             state["npm"][package] = current
             continue
 
         latest = npm_latest_version(package) if current else None
         if current and latest == current:
-            detail(f"{package}: already at {current}")
+            step_end(label, f"already at {current}")
             note_skip()
             continue
 
         if dry_run:
-            detail(f"would install {package}")
+            step_end(label, "would install")
             continue
 
-        run(
-            ["npm", "install", "-g", "--prefix", str(NPM_PREFIX), f"{package}@latest"],
-            dry_run=False,
-            verbose=verbose,
-        )
+        try:
+            run(
+                [
+                    "npm", "install", "-g",
+                    "--prefix", str(NPM_PREFIX),
+                    f"{package}@latest",
+                ],
+                dry_run=False,
+                verbose=verbose,
+            )
+        except SystemExit:
+            step_end(label, "failed")
+            raise
+
         version = npm_installed_version(package) or "unknown"
-        detail(f"{package}: installed {version}")
+        step_end(label, f"done ({version})")
         installed.append(package)
         state["npm"][package] = version
 
@@ -818,17 +930,18 @@ def sync_go(
         warn("go is not on PATH; skipping the go section")
         return
 
-    for name, package in desired.items():
+    for index, (name, package) in enumerate(desired.items(), start=1):
         binary = BIN_DIR / name
+        label = step_start(index, len(desired), name)
 
         if binary.exists() and not upgrade:
-            detail(f"{name}: already installed")
+            step_end(label, "already installed")
             note_skip()
             state["go"][name] = package
             continue
 
         if dry_run:
-            detail(f"would go install {package}")
+            step_end(label, f"would go install {package}")
             continue
 
         env = child_env()
@@ -841,13 +954,14 @@ def sync_go(
             env=env,
         )
         if result.returncode != 0:
-            warn(f"{name}: go install failed")
+            step_end(label, "failed")
+            note_warning(f"{name}: go install failed")
             if not verbose and result.stderr:
                 for line in result.stderr.splitlines():
                     detail(f"    {line}")
             continue
 
-        detail(f"{name}: installed")
+        step_end(label, "done")
         installed.append(name)
         state["go"][name] = package
 
@@ -872,12 +986,13 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
 
     touched = False
 
-    for name, spec in desired.items():
+    for index, (name, spec) in enumerate(desired.items(), start=1):
         known = state["fonts"].get(name)
         target = FONT_DIR / name
+        label = step_start(index, len(desired), name)
 
         if known and target.exists() and not upgrade:
-            detail(f"{name}: already at {known['version']}")
+            step_end(label, f"already at {known['version']}")
             note_skip()
             continue
 
@@ -885,20 +1000,22 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
             tag = spec.get("version") or github_latest_tag(spec["repo"])
         except UpstreamUnavailable as error:
             if known:
-                warn(f"{name}: {error}; keeping {known['version']}")
+                step_end(label, f"kept {known['version']} (upstream unavailable)")
+                note_warning(f"{name}: {error}; keeping {known['version']}")
                 continue
+            step_end(label, "failed")
             raise SystemExit(str(error)) from error
 
         asset = format_asset(spec["asset"], tag)
         url = f"https://github.com/{spec['repo']}/releases/download/{tag}/{asset}"
 
         if known and known["version"] == tag and target.exists():
-            detail(f"{name}: already at {tag}")
+            step_end(label, f"already at {tag}")
             note_skip()
             continue
 
         if dry_run:
-            detail(f"would fetch {name} {tag} from {url}")
+            step_end(label, f"would fetch {tag} from {url}")
             continue
 
         with staging_area(FONT_DIR) as tmp:
@@ -917,7 +1034,7 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
                 shutil.copy2(face, target / face.name)
 
         state["fonts"][name] = {"version": tag, "dir": str(target)}
-        detail(f"{name}: installed {tag}")
+        step_end(label, f"done ({tag})")
         installed.append(name)
         touched = True
 
