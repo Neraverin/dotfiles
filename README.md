@@ -1,14 +1,10 @@
 # dotfiles
 
-Machine configuration for Linux/WSL development machines. Two implementations of the same
-setup live here side by side while the migration runs:
+Machine configuration for Linux/WSL development machines, applied with the distribution's own
+tooling: apt packages, upstream release binaries, npm globals, dotfiles and a bash snippet, all
+declared in `provision/config.yaml`.
 
-| Path | Approach |
-| --- | --- |
-| `provision/` | Distribution packages, upstream releases and npm, driven by `provision/config.yaml`. |
-| `flake.nix`, `home/` | The original Nix + home-manager configuration, kept until every host has moved. |
-
-## Provision
+## Apply
 
 ```sh
 ./provision/provision.py --dry-run     # report what would change
@@ -18,7 +14,7 @@ setup live here side by side while the migration runs:
 
 Desktop-only entries are applied when a graphical session is detected; force the decision
 with `--gui` / `--no-gui`. `--only <section>` limits the run to one of `apt`, `github`,
-`archive`, `npm`, `go`, `fonts`, `files`, `shell`.
+`archive`, `npm`, `go`, `fonts`, `files`, `shell`. `--verbose` streams command output.
 
 What it installed is recorded in `~/.local/state/dotfiles/state.json`. Removing an entry from
 `config.yaml` removes what that entry installed on the next run — and nothing else, so packages
@@ -30,13 +26,27 @@ Version lookups use the anonymous GitHub API, which allows 60 calls an hour per 
 `GITHUB_TOKEN` if several hosts share one address; without it a rate-limited run keeps the
 installed version and warns, and only fails outright when the tool is not installed yet.
 
-## Migrate off Nix
+## Bootstrap
 
-On a host still running home-manager:
+On a fresh Debian/Ubuntu host:
+
+```sh
+sudo apt-get install -y python3-yaml
+./provision/provision.py
+```
+
+`bootstrap-workstation.sh` adds the Ubuntu-desktop software this does not manage:
+wezterm-nightly, telegram-desktop, happ and tailscale. `./tailscale-up.sh` then joins the
+tailnet.
+
+## Migrating a host off Nix
+
+Earlier versions of this repository used a Nix flake with home-manager. On a host still
+running it:
 
 ```sh
 ./migrate-from-nix.sh --dry-run    # walk through it without changing anything
-./migrate-from-nix.sh              # deactivate home-manager, then provision
+./migrate-from-nix.sh              # deactivate home-manager, restore dotfiles, provision
 ```
 
 That leaves Nix installed but unused, which is the point to open a new shell and check the
@@ -49,27 +59,8 @@ tools you rely on. When satisfied:
 which stops the daemon, deletes `/nix`, the build users and the installer's shell hooks.
 That step is destructive and this script does not undo it.
 
-## Bootstrap
+Over SSH there is no terminal for `sudo` to prompt on, so point `SUDO_ASKPASS` at a helper or
+prime the timestamp with `sudo -v` first.
 
-On a fresh Debian/Ubuntu host:
-
-```sh
-./bootstrap-nix.sh    # only if you still want the Nix path
-./provision/provision.py
-```
-
-`bootstrap-workstation.sh` adds the Ubuntu-desktop software neither path manages:
-wezterm-nightly, telegram-desktop, happ and tailscale.
-
-## Nix (legacy)
-
-```sh
-./activate.sh       # build and activate the locked home-manager generation
-nix flake check
-```
-
-`BACKUP_EXT=hm-backup ./activate.sh` changes the extension used for displaced files.
-
-| Configuration | Module | Use for |
-| --- | --- | --- |
-| `neraverin@server` | `home/common.nix` | servers, WSL and workstations |
+The flake and its home-manager module are no longer in the working tree; check out the commit
+before their removal if you need them back.

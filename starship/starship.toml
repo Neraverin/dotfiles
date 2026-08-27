@@ -1,4 +1,4 @@
-# Mirrors the former programs.starship.settings block from home/common.nix.
+# Placed by provision.py; see the `files` section of provision/config.yaml.
 format = "$time $username $custom $all"
 
 [time]

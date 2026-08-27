@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install workstation-only software that is not managed by Nix.
+# Install workstation-only software that provision.py does not manage.
 set -euo pipefail
 
 wezterm_keyring=/usr/share/keyrings/wezterm-fury.gpg
@@ -20,7 +20,7 @@ while [[ $# -gt 0 ]]; do
     --help)
       echo "Usage: $(basename "$0") [OPTIONS]"
       echo ""
-      echo "Install workstation software that is not managed by Nix:"
+      echo "Install workstation software that provision.py does not manage:"
       echo "${components[*]}."
       echo ""
       echo "Options:"
