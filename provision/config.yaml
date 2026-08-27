@@ -98,7 +98,12 @@ common:
       # Debian 12 ships Go 1.19, far behind what the modules here need, and the
       # toolchain is one self-contained tree — upstream's tarball is simplest.
       url: https://go.dev/dl/{version}.linux-amd64.tar.gz
-      version_url: https://go.dev/VERSION?m=text
+      # Pinned, not `version_url: https://go.dev/VERSION?m=text`: endpoint
+      # security on the workstation denies reads of the go1.27.0 tarball by
+      # content hash — the download succeeds, every later open fails with EPERM.
+      # The file is genuine (sha256 matches go.dev), so this is a false
+      # positive on a fresh release. Drop the pin once it is cleared.
+      version: go1.26.7
       strip: 1
       bin: [go, gofmt]
 
@@ -161,7 +166,15 @@ gui:
       archive_name: deadbeef-static_{version}-1_x86_64.tar.bz2
       strip: 1
       bin: [deadbeef]
-      desktop: [share/applications/deadbeef.desktop]
+      # The static build ships the binary and its data, no packaging metadata,
+      # so the launcher is generated rather than patched.
+      desktop:
+        name: DeaDBeeF
+        exec: deadbeef
+        icon: deadbeef.png
+        comment: Audio player
+        categories: AudioVideo;Audio;Player;
+        mimetype: audio/mpeg;audio/flac;audio/ogg;audio/x-vorbis+ogg;audio/x-wav;
 
   fonts:
     hack-nerd-font:
