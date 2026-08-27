@@ -1,0 +1,13 @@
+# Mirrors the former programs.starship.settings block from home/common.nix.
+format = "$time $username $custom $all"
+
+[time]
+disabled = false
+format = "[$time]($style)"
+time_format = "%H:%M"
+
+[username]
+show_always = true
+format = "[$user]($style)"
+style_user = "#808080"
+style_root = "red"

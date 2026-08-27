@@ -1,0 +1,180 @@
+# Declarative machine configuration for provision.py — the full replacement for
+# home/common.nix. Every package, file and shell tweak the Nix profile used to
+# provide has an entry here, sourced from the distribution or from upstream.
+#
+# `common` applies everywhere. `gui` is merged on top only on graphical hosts,
+# either detected automatically or forced with --gui / --no-gui.
+#
+# Source sections, in the order provision.py applies them:
+#   apt      distribution packages, plus renamed-binary links
+#   github   release assets: archives (`binaries:`) or raw executables (`binary:`)
+#   archive  arbitrary tarballs unpacked under ~/.local/opt/<name>
+#   npm      global npm packages under ~/.local
+#   go       `go install` targets, built with the toolchain from `archive`
+#   fonts    font archives unpacked under ~/.local/share/fonts/<name>
+#   files    repository-owned dotfiles, rewritten on every run
+#   seeds    dotfiles the application rewrites itself, created once
+#   lines    single lines appended to a foreign config unless already present
+#   shell    rendered into ~/.bashrc.d/50-dotfiles.sh
+#
+# Deliberately dropped from the Nix package list: nil and nixd, which are Nix
+# language servers with nothing left to serve once Nix is gone.
+
+common:
+  # Distribution packages. Anything Debian 12 — the oldest host — ships in a
+  # usable version belongs here; the rest moves to `github`.
+  apt:
+    packages:
+      - bat
+      - ca-certificates
+      - curl
+      - direnv
+      - fd-find
+      - fontconfig
+      - fzf
+      - git
+      - glances
+      - htop
+      - jq
+      - mc
+      - net-tools
+      - nodejs
+      - npm
+      - poppler-utils
+      - python3-yaml
+      - shellcheck
+      - tree
+      - unzip
+      - vim
+      - wget
+
+    # Debian renames two binaries to dodge a name clash. Upstream scripts, and
+    # the `cat = bat` alias below, expect the upstream names.
+    links:
+      batcat: bat
+      fdfind: fd
+
+  # Upstream release binaries, for tools the distributions keep too old.
+  # `asset` accepts {version} (the tag verbatim) and {version_strip} (without a
+  # leading v) because upstreams disagree about which one they put in filenames.
+  github:
+    golangci-lint:
+      repo: golangci/golangci-lint
+      asset: golangci-lint-{version_strip}-linux-amd64.tar.gz
+      binaries: [golangci-lint]
+    herdr:
+      repo: ogulcancelik/herdr
+      asset: herdr-linux-x86_64
+      binary: herdr
+    procs:
+      repo: dalance/procs
+      asset: procs-{version}-x86_64-linux.zip
+      binaries: [procs]
+    ripgrep:
+      repo: BurntSushi/ripgrep
+      asset: ripgrep-{version}-x86_64-unknown-linux-musl.tar.gz
+      binaries: [rg]
+    starship:
+      repo: starship/starship
+      asset: starship-x86_64-unknown-linux-gnu.tar.gz
+      binaries: [starship]
+    witr:
+      repo: pranshuparmar/witr
+      asset: witr-linux-amd64
+      binary: witr
+    yq:
+      repo: mikefarah/yq
+      asset: yq_linux_amd64
+      binary: yq
+    zoxide:
+      repo: ajeetdsouza/zoxide
+      asset: zoxide-{version_strip}-x86_64-unknown-linux-musl.tar.gz
+      binaries: [zoxide]
+
+  # Tarballs that are not GitHub releases. Unpacked whole under
+  # ~/.local/opt/<name>; `bin` is symlinked from ~/.local/bin.
+  archive:
+    go:
+      # Debian 12 ships Go 1.19, far behind what the modules here need, and the
+      # toolchain is one self-contained tree — upstream's tarball is simplest.
+      url: https://go.dev/dl/{version}.linux-amd64.tar.gz
+      version_url: https://go.dev/VERSION?m=text
+      strip: 1
+      bin: [go, gofmt]
+
+  # Global npm packages, installed under ~/.local so no root is involved.
+  npm:
+    - "@anthropic-ai/claude-code"
+    - "@fission-ai/openspec"
+    - "@openai/codex"
+
+  # Built from source with the Go toolchain above, into ~/.local/bin.
+  go:
+    gopls: golang.org/x/tools/gopls@latest
+
+  # Files this repository owns: rewritten on every run.
+  files:
+    ~/.config/starship.toml: starship/starship.toml
+
+  # Files an application rewrites itself: created once, then left alone.
+  seeds:
+    ~/.codex/config.toml: codex/config.toml
+    ~/.claude/settings.json: claude/settings.json
+    ~/.claude/statusline-command.sh:
+      source: claude/statusline-command.sh
+      mode: 0755
+
+  # Rendered into ~/.bashrc.d/50-dotfiles.sh, which ~/.bashrc is taught to
+  # source. The distribution's own ~/.bashrc is never replaced.
+  shell:
+    env:
+      EDITOR: vim
+    path:
+      - $HOME/.local/bin
+    aliases:
+      cat: bat
+      grep: rg
+      ll: ls -alF
+      ls: ls --color=auto
+    init:
+      - direnv hook bash
+      - starship init bash
+      - zoxide init bash
+    # Raw lines, for what an `eval "$(...)"` cannot express. fzf only grew
+    # `--bash` in 0.48; Debian 12 still ships 0.38 with the examples directory.
+    snippets:
+      - 'if command -v fzf >/dev/null 2>&1; then'
+      - '  if fzf --bash >/dev/null 2>&1; then'
+      - '    eval "$(fzf --bash)"'
+      - '  elif [ -f /usr/share/doc/fzf/examples/key-bindings.bash ]; then'
+      - '    . /usr/share/doc/fzf/examples/key-bindings.bash'
+      - '  fi'
+      - 'fi'
+
+gui:
+  archive:
+    deadbeef:
+      # Not in the Ubuntu 26.04 archive and with no GitHub release; upstream's
+      # static build is the only packaging that still installs cleanly.
+      url: https://sourceforge.net/projects/deadbeef/files/travis/linux/{version}/deadbeef-static_{version}-1_x86_64.tar.bz2/download
+      version: 1.10.0
+      archive_name: deadbeef-static_{version}-1_x86_64.tar.bz2
+      strip: 1
+      bin: [deadbeef]
+      desktop: [share/applications/deadbeef.desktop]
+
+  fonts:
+    hack-nerd-font:
+      repo: ryanoasis/nerd-fonts
+      asset: Hack.zip
+
+  files:
+    ~/.config/wezterm/wezterm.lua: wezterm/wezterm.lua
+
+  # DeaDBeeF's ALSA output cannot reach Ubuntu's PipeWire bridge; its PulseAudio
+  # output talks to the pipewire-pulse socket directly. Appended only when the
+  # key is unset, so a plugin picked in the GUI survives later runs.
+  lines:
+    ~/.config/deadbeef/config:
+      - match: '^output_plugin '
+        line: output_plugin pulseaudio
