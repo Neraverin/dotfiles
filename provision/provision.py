@@ -107,6 +107,25 @@ def sudo(cmd: list[str]) -> list[str]:
     return cmd if os.geteuid() == 0 else ["sudo", *cmd]
 
 
+def ensure_sudo(*, dry_run: bool) -> None:
+    """Take the sudo password now, while a prompt can still be seen.
+
+    Every other command runs under capture_output, which swallows sudo's prompt
+    while sudo still waits on /dev/tty — a silent hang with nothing on screen.
+    Priming the timestamp here keeps the prompt visible and the later calls
+    non-interactive.
+    """
+    if dry_run or os.geteuid() == 0:
+        return
+
+    if subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode == 0:
+        return
+
+    detail("apt needs root; sudo will ask for your password")
+    if subprocess.run(["sudo", "-v"]).returncode != 0:
+        raise SystemExit("sudo authentication failed")
+
+
 def fetch(url: str, destination: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=120) as response:
@@ -278,6 +297,9 @@ def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> Non
         for p in state["apt"]["packages"]
         if p not in packages and dpkg_installed(p)
     ]
+
+    if missing or stale:
+        ensure_sudo(dry_run=dry_run)
 
     if missing:
         run(sudo(["apt-get", "update"]), dry_run=dry_run, verbose=verbose)
