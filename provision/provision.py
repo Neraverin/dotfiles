@@ -227,9 +227,12 @@ def link_bin(source: Path, name: str) -> Path:
 def detect_gui() -> tuple[bool, str]:
     """Guess whether this host has a desktop.
 
-    Ordered from the most reliable signal to the weakest. WSL is treated as
-    headless: WSLg can show windows, but none of the desktop packages here make
-    sense there.
+    Evidence that desktop software is actually installed decides this; the
+    systemd default target does not. Debian leaves default.target at
+    graphical.target on a plain netinstall server with no X, no Wayland and no
+    display manager, so trusting it drags fonts and a music player onto hosts
+    that can never show a window. WSL is treated as headless: WSLg can display
+    windows, but none of the desktop entries here make sense there.
     """
     version_file = Path("/proc/version")
     if version_file.exists() and "microsoft" in version_file.read_text().lower():
@@ -238,21 +241,30 @@ def detect_gui() -> tuple[bool, str]:
     if os.environ.get("XDG_CURRENT_DESKTOP"):
         return True, f"XDG_CURRENT_DESKTOP={os.environ['XDG_CURRENT_DESKTOP']}"
 
+    for package in (
+        "gnome-shell",
+        "xserver-xorg-core",
+        "sway",
+        "kde-plasma-desktop",
+        "xwayland",
+    ):
+        if dpkg_installed(package):
+            return True, f"{package} is installed"
+
+    for manager in ("gdm3", "sddm", "lightdm", "xdm"):
+        if dpkg_installed(manager):
+            return True, f"{manager} is installed"
+
+    # Only ever used to rule a desktop out, never to conclude there is one.
     if shutil.which("systemctl"):
         result = subprocess.run(
             ["systemctl", "get-default"], capture_output=True, text=True
         )
         target = result.stdout.strip()
-        if target == "graphical.target":
-            return True, "systemd default target is graphical"
-        if target:
+        if target and target != "graphical.target":
             return False, f"systemd default target is {target}"
 
-    for package in ("gnome-shell", "xserver-xorg-core", "sway", "kde-plasma-desktop"):
-        if dpkg_installed(package):
-            return True, f"{package} is installed"
-
-    return False, "no desktop signals found"
+    return False, "no desktop software installed"
 
 
 # --------------------------------------------------------------------------- state
