@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Provision a machine from config.yaml using the distribution's own tooling.
 
-The replacement for the Nix/home-manager path in this repository. It covers what
-that setup was actually used for: install a declared set of packages, place a few
-config files, and extend the shell. There is no atomic switch and no rollback,
-which is deliberate — the cost of those was the whole reason to leave.
+It does what this repository actually needs: install a declared set of packages,
+place a few config files, and extend the shell, using the distribution's own
+tooling. There is no atomic switch and no rollback, which is deliberate — the
+cost of those was the whole reason to leave the previous setup.
 
 State lives in ~/.local/state/dotfiles/state.json so that dropping an entry from
 the YAML removes what it installed, and only what *this* tool installed. Anything
@@ -698,8 +698,8 @@ def write_desktop_entry(name: str, root: Path, entry: dict) -> str:
 def install_desktop_entries(name: str, root: Path, spec: dict) -> list[str]:
     """Place .desktop files, absolutising Exec and Icon.
 
-    Nix put these on XDG_DATA_DIRS through the profile; without a profile the
-    entries have to land in ~/.local/share/applications and name full paths.
+    Nothing puts ~/.local/opt on XDG_DATA_DIRS, so the entries have to land in
+    ~/.local/share/applications and spell out full paths.
     """
     desktop = spec.get("desktop")
     if isinstance(desktop, dict):

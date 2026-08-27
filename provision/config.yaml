@@ -1,6 +1,6 @@
-# Declarative machine configuration for provision.py — the full replacement for
-# home/common.nix. Every package, file and shell tweak the Nix profile used to
-# provide has an entry here, sourced from the distribution or from upstream.
+# Declarative machine configuration for provision.py. Every package, file and
+# shell tweak a host needs has an entry here, sourced from the distribution or
+# from upstream.
 #
 # `common` applies everywhere. `gui` is merged on top only on graphical hosts,
 # either detected automatically or forced with --gui / --no-gui.
@@ -17,8 +17,8 @@
 #   lines    single lines appended to a foreign config unless already present
 #   shell    rendered into ~/.bashrc.d/50-dotfiles.sh
 #
-# Deliberately dropped from the Nix package list: nil and nixd, which are Nix
-# language servers with nothing left to serve once Nix is gone.
+# Kept deliberately host-agnostic: nothing here may assume a graphical session,
+# a specific distribution, or a path outside $HOME.
 
 common:
   # Distribution packages. Anything Debian 12 — the oldest host — ships in a
