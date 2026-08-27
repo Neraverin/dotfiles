@@ -14,6 +14,7 @@ that predates the tool is left where it is.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -216,6 +217,24 @@ def extract_archive(archive: Path, target: Path, *, strip: int = 0) -> None:
             handle.extractall(target, members=members, filter="data")
         except TypeError:  # pragma: no cover - Python < 3.12
             handle.extractall(target, members=members)
+
+
+@contextlib.contextmanager
+def staging_area(base: Path):
+    """A scratch directory on the same filesystem as `base`.
+
+    The system temp dir is the wrong place for these payloads: it is often a
+    small tmpfs, and unpacking there means the finished tree has to be copied
+    across a filesystem boundary — twice the peak space, and a half-written
+    destination when the disk fills. Staging next to the target makes the final
+    move a rename.
+    """
+    base.mkdir(parents=True, exist_ok=True)
+    path = Path(tempfile.mkdtemp(dir=base, prefix=".staging-"))
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def find_binary(root: Path, name: str) -> Path:
@@ -480,8 +499,8 @@ def install_github(
         detail(f"would fetch {name} {tag} from {url}")
         return
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
+    with staging_area(BIN_DIR) as tmp:
+        tmp_path = tmp
         payload = tmp_path / asset
         fetch(url, payload)
 
@@ -657,18 +676,19 @@ def install_archive(
         detail(f"would fetch {name} {version} from {url}")
         return
 
-    with tempfile.TemporaryDirectory() as tmp:
-        payload = Path(tmp) / archive_name
+    with staging_area(OPT_DIR) as tmp:
+        payload = tmp / archive_name
         fetch(url, payload)
-        staging = Path(tmp) / "staging"
-        extract_archive(payload, staging, strip=int(spec.get("strip") or 0))
+        unpacked = tmp / "unpacked"
+        extract_archive(payload, unpacked, strip=int(spec.get("strip") or 0))
+        payload.unlink()
 
         # Replace the tree wholesale: an upgrade that merged into the old one
-        # would leave files the new release no longer ships.
-        OPT_DIR.mkdir(parents=True, exist_ok=True)
+        # would leave files the new release no longer ships. Same filesystem,
+        # so this is a rename and cannot half-finish.
         if target.exists():
             shutil.rmtree(target)
-        shutil.move(str(staging), str(target))
+        unpacked.rename(target)
 
     links = []
     for binary in spec["bin"]:
@@ -881,10 +901,10 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
             detail(f"would fetch {name} {tag} from {url}")
             continue
 
-        with tempfile.TemporaryDirectory() as tmp:
-            payload = Path(tmp) / asset
+        with staging_area(FONT_DIR) as tmp:
+            payload = tmp / asset
             fetch(url, payload)
-            staging = Path(tmp) / "staging"
+            staging = tmp / "staging"
             extract_archive(payload, staging)
 
             FONT_DIR.mkdir(parents=True, exist_ok=True)
