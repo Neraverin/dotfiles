@@ -118,19 +118,41 @@ for link in "${HOME}/.nix-profile" "${HOME}/.nix-defexpr"; do
   fi
 done
 
-# Anything home-manager backed up during an earlier activation is still on disk
-# under .backup; leaving it is harmless but the user should know it is there.
-# home-manager only ever displaced dotfiles at the top of $HOME or one level
-# into ~/.config; a deeper sweep just catches unrelated ".backup" files.
-backups=$(
+# home-manager displaced the distribution's own dotfiles when it first
+# activated, saving each as <file>.backup, and its uninstall removes the
+# generation's symlink without putting the original back. Left alone, the host
+# loses ~/.profile — which is what puts ~/.local/bin on PATH for non-interactive
+# shells — and the whole of ~/.bashrc. Restore anything whose target is now
+# missing; never overwrite a file that survived.
+step "Restoring displaced dotfiles"
+
+restored=0
+kept=0
+
+while IFS= read -r backup; do
+  [[ -n "${backup}" ]] || continue
+  original="${backup%.backup}"
+
+  if [[ -e "${original}" ]]; then
+    detail "${original} is present; leaving ${backup} alone"
+    kept=$((kept + 1))
+    continue
+  fi
+
+  act cp -a -- "${backup}" "${original}"
+  did "restored ${original} from ${backup}"
+  restored=$((restored + 1))
+done < <(
   {
     find "${HOME}" -maxdepth 1 -name '*.backup'
     find "${HOME}/.config" -maxdepth 2 -name '*.backup'
-  } 2>/dev/null | head -20 || true
+  } 2>/dev/null | sort
 )
-if [[ -n "${backups}" ]]; then
-  detail "home-manager backups left in place:"
-  while IFS= read -r file; do detail "    ${file}"; done <<<"${backups}"
+
+if (( restored == 0 && kept == 0 )); then
+  detail "no home-manager backups found"
+else
+  detail "${restored} restored, ${kept} left in place (backups are kept either way)"
 fi
 
 # ------------------------------------------------------------------ 2. provision
