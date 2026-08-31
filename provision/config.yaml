@@ -6,7 +6,7 @@
 # either detected automatically or forced with --gui / --no-gui.
 #
 # Source sections, in the order provision.py applies them:
-#   apt      distribution packages, plus renamed-binary links
+#   apt      third-party repositories, distribution packages, renamed-binary links
 #   github   release assets: archives (`binaries:`) or raw executables (`binary:`)
 #   archive  arbitrary tarballs unpacked under ~/.local/opt/<name>
 #   npm      global npm packages under ~/.local
@@ -24,11 +24,31 @@ common:
   # Distribution packages. Anything Debian 12 — the oldest host — ships in a
   # usable version belongs here; the rest moves to `github`.
   apt:
+    # Third-party repositories, written before anything is installed. `key`,
+    # `uri` and `suites` take {id}, {codename} and {arch} from the host, so one
+    # entry resolves to debian/bookworm on the WSL instance and ubuntu/resolute
+    # on the workstation. A repository with no suite for the running release is
+    # skipped with a warning rather than left to break every later apt-get
+    # update.
+    repos:
+      docker:
+        # Neither Debian nor Ubuntu ships the engine: docker.io is the old fork,
+        # trails upstream by releases and carries no compose v2 plugin. Docker's
+        # own repository is the only source for docker-ce and the plugins below.
+        key: https://download.docker.com/linux/{id}/gpg
+        uri: https://download.docker.com/linux/{id}
+        components: stable
+
     packages:
       - bat
       - ca-certificates
+      - containerd.io
       - curl
       - direnv
+      - docker-buildx-plugin
+      - docker-ce
+      - docker-ce-cli
+      - docker-compose-plugin
       - fd-find
       - fontconfig
       - fzf

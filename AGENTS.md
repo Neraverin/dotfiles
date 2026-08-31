@@ -7,7 +7,7 @@ Personal dotfiles for Linux/WSL machines, provisioned with the distribution's ow
 
 | Path | What it is |
 | --- | --- |
-| `provision/provision.py` | The whole tool: apt, GitHub releases, tarballs, npm, `go install`, fonts, dotfiles and the bash snippet, driven by `config.yaml`. |
+| `provision/provision.py` | The whole tool: apt (packages and third-party repositories), GitHub releases, tarballs, npm, `go install`, fonts, dotfiles and the bash snippet, driven by `config.yaml`. |
 | `provision/config.yaml` | Full declaration of every host. `common` everywhere, `gui` merged on top on graphical hosts. |
 | `bootstrap-workstation.sh` | Ubuntu desktop only. Software `provision.py` does not handle: wezterm-nightly, telegram-desktop, happ, tailscale. |
 | `tailscale-up.sh` | Joins the Headscale tailnet (`TAILSCALE_LOGIN_SERVER` overrides the server). |
@@ -38,6 +38,10 @@ asked. The same goes for `migrate-from-nix.sh`, which is destructive by design.
 
 - `config.yaml` picks a source per package, and the rule is fixed: apt if Debian 12 — the oldest
   host — ships a usable version, otherwise upstream. Say which one and why when adding an entry.
+- Third-party apt repositories go in `apt.repos`, keyed on `{id}`/`{codename}`/`{arch}` from the
+  host so one entry covers every distribution. A repository is probed for a suite matching the
+  running release before it is written: an upstream that has not caught up with a fresh release
+  must warn, never leave a stanza behind that breaks every later `apt-get update` on the host.
 - `provision.py` only ever removes what its own state file says it installed. Keep that property:
   a new source section needs both an install path and a removal path keyed off state.
 - Two ways to place a dotfile, and the choice matters:

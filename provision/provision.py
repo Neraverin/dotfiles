@@ -357,7 +357,7 @@ def detect_gui() -> tuple[bool, str]:
 # --------------------------------------------------------------------------- state
 
 EMPTY_STATE = {
-    "apt": {"packages": [], "links": {}},
+    "apt": {"packages": [], "links": {}, "repos": []},
     "github": {},
     "archive": {},
     "npm": {},
@@ -377,6 +377,9 @@ def load_state() -> dict:
     if isinstance(state["apt"], list):
         state["apt"] = {"packages": state["apt"], "links": {}}
 
+    for key, default in EMPTY_STATE["apt"].items():
+        state["apt"].setdefault(key, json.loads(json.dumps(default)))
+
     return state
 
 
@@ -385,6 +388,201 @@ def save_state(state: dict, *, dry_run: bool) -> None:
         return
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+# ------------------------------------------------------------- apt repositories
+
+APT_KEYRING_DIR = Path("/etc/apt/keyrings")
+APT_SOURCES_DIR = Path("/etc/apt/sources.list.d")
+
+
+def apt_key_path(name: str) -> Path:
+    # Kept ASCII-armoured: apt reads either form as long as the extension says
+    # which one it is, and .asc means no gpg --dearmor step and no gnupg on the
+    # host at all.
+    return APT_KEYRING_DIR / f"{name}.asc"
+
+
+def apt_sources_path(name: str) -> Path:
+    return APT_SOURCES_DIR / f"{name}.sources"
+
+
+def host_facts() -> dict:
+    """What a third-party apt repository has to be addressed by on this host.
+
+    Upstreams publish one tree per distribution and one suite per release, so the
+    URL cannot be spelled out in config.yaml: the same entry has to resolve to
+    debian/bookworm on the WSL instance and ubuntu/resolute on the workstation.
+    """
+    values: dict[str, str] = {}
+    try:
+        for line in Path("/etc/os-release").read_text().splitlines():
+            key, separator, value = line.partition("=")
+            if separator:
+                values[key] = value.strip().strip('"')
+    except OSError:
+        pass
+
+    architecture = subprocess.run(
+        ["dpkg", "--print-architecture"], capture_output=True, text=True
+    ).stdout.strip()
+
+    return {
+        "id": values.get("ID", ""),
+        "codename": values.get("VERSION_CODENAME", ""),
+        "arch": architecture,
+    }
+
+
+def apt_repo_field(value, facts: dict) -> str:
+    items = value if isinstance(value, list) else [value]
+    return " ".join(str(item).format(**facts) for item in items)
+
+
+def render_apt_repo(name: str, spec: dict, facts: dict) -> str:
+    """One deb822 stanza — the format apt prefers, and free of quoting rules."""
+    fields = {
+        "Types": apt_repo_field(spec.get("types", "deb"), facts),
+        "URIs": apt_repo_field(spec["uri"], facts),
+        "Suites": apt_repo_field(spec.get("suites", "{codename}"), facts),
+        "Components": apt_repo_field(spec.get("components", "main"), facts),
+        "Architectures": apt_repo_field(spec.get("architectures", "{arch}"), facts),
+        "Signed-By": str(apt_key_path(name)),
+    }
+    return "".join(f"{key}: {value}\n" for key, value in fields.items())
+
+
+def apt_repo_reachable(spec: dict, facts: dict) -> bool:
+    """Does the repository actually carry a suite for this release?
+
+    A repository with no directory for a fresh distribution release breaks every
+    later `apt-get update` on the host, not just its own packages, so nothing is
+    written until the suite is known to exist.
+    """
+    suites = spec.get("suites", "{codename}")
+    suite = apt_repo_field(suites, facts).split(" ")[0]
+    if suite.endswith("/"):  # a flat repository has no dists/ tree to probe
+        return True
+
+    url = f"{apt_repo_field(spec['uri'], facts).rstrip('/')}/dists/{suite}/Release"
+    request = urllib.request.Request(
+        url, method="HEAD", headers={"User-Agent": USER_AGENT}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30):
+            return True
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def install_as_root(content: bytes, destination: Path, *, verbose: bool) -> None:
+    with staging_area(STATE_PATH.parent) as staging:
+        source = staging / destination.name
+        source.write_bytes(content)
+        run(
+            sudo(
+                # -D creates /etc/apt/keyrings on hosts old enough not to have it.
+                ["install", "-D", "-o", "root", "-g", "root", "-m", "0644"]
+                + [str(source), str(destination)]
+            ),
+            dry_run=False,
+            verbose=verbose,
+        )
+
+
+def read_root_file(path: Path) -> str:
+    try:
+        return path.read_text()
+    except OSError:
+        return ""
+
+
+def sync_apt_repos(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> bool:
+    """Write the declared repositories. True when apt has to re-read its lists."""
+    owned = list(state["apt"]["repos"])
+    stale = [name for name in owned if name not in desired]
+
+    if not desired and not stale:
+        return False
+
+    facts = host_facts()
+    changed = False
+    keep = [name for name in owned if name in desired]
+
+    for index, (name, spec) in enumerate(desired.items(), start=1):
+        if not facts["id"] or not facts["codename"]:
+            note_warning(
+                f"{name}: /etc/os-release names no distribution and release; "
+                "repository skipped"
+            )
+            continue
+
+        stanza = render_apt_repo(name, spec, facts)
+        sources = apt_sources_path(name)
+        current = read_root_file(sources)
+
+        if current == stanza and apt_key_path(name).exists():
+            detail(f"{name}: repository already configured")
+            note_skip()
+            if name not in keep:
+                keep.append(name)
+            continue
+
+        # Same rule as for packages: a file this tool did not write is not ours
+        # to rewrite, and never becomes ours to remove.
+        if current and name not in owned:
+            note_warning(f"{name}: {sources} was not written here; left alone")
+            continue
+
+        if not apt_repo_reachable(spec, facts):
+            note_warning(
+                f"{name}: no {facts['codename']} suite at "
+                f"{apt_repo_field(spec['uri'], facts)}; repository skipped"
+            )
+            continue
+
+        if dry_run:
+            detail(f"{name}: would add {apt_repo_field(spec['uri'], facts)}")
+            installed.append(f"{name} repository")
+            changed = True
+            continue
+
+        ensure_sudo(dry_run=False)
+        label = step_start(index, len(desired), f"{name} repository")
+        try:
+            with staging_area(STATE_PATH.parent) as staging:
+                key = staging / f"{name}.asc"
+                fetch(apt_repo_field(spec["key"], facts), key)
+                install_as_root(key.read_bytes(), apt_key_path(name), verbose=verbose)
+            install_as_root(stanza.encode(), sources, verbose=verbose)
+        except SystemExit:
+            step_end(label, "failed")
+            raise
+        step_end(label, "added")
+        installed.append(f"{name} repository")
+        if name not in keep:
+            keep.append(name)
+        changed = True
+
+    for name in stale:
+        paths = [apt_sources_path(name), apt_key_path(name)]
+        if not any(path.exists() for path in paths):
+            continue
+        if dry_run:
+            detail(f"{name}: would remove repository")
+        else:
+            ensure_sudo(dry_run=False)
+            run(
+                sudo(["rm", "-f", *[str(path) for path in paths]]),
+                dry_run=False,
+                verbose=verbose,
+            )
+            detail(f"{name}: repository removed")
+        removed.append(f"{name} repository")
+        changed = True
+
+    state["apt"]["repos"] = sorted(keep)
+    return changed
 
 
 # --------------------------------------------------------------------------- apt
@@ -407,11 +605,17 @@ def apt_version(package: str) -> str:
 def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> None:
     packages = desired.get("packages") or []
     links = desired.get("links") or {}
+    repos = desired.get("repos") or {}
 
-    if not packages and not state["apt"]["packages"]:
+    if not packages and not state["apt"]["packages"] and not repos:
         return
 
     log("apt")
+
+    # Repositories first: a package below may only exist in one of them.
+    repos_changed = sync_apt_repos(
+        repos, state, dry_run=dry_run, verbose=verbose
+    )
 
     missing = [p for p in packages if not dpkg_installed(p)]
     stale = [
@@ -423,7 +627,7 @@ def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> Non
     if missing or stale:
         ensure_sudo(dry_run=dry_run)
 
-    if missing:
+    if missing or repos_changed:
         run(sudo(["apt-get", "update"]), dry_run=dry_run, verbose=verbose)
 
     # One apt-get call per package. Slower than a single batched call — apt
@@ -1249,6 +1453,7 @@ def merge_apt(common: dict, gui: dict) -> dict:
     return {
         "packages": packages,
         "links": {**(base.get("links") or {}), **(extra.get("links") or {})},
+        "repos": {**(base.get("repos") or {}), **(extra.get("repos") or {})},
     }
 
 

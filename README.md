@@ -22,6 +22,11 @@ that predate the tool are never touched.
 
 Requires a Debian or Ubuntu host, `python3-yaml`, and `sudo` for the `apt` section only.
 
+The `apt` section also owns third-party repositories — Docker's, currently: the keyring lands in
+`/etc/apt/keyrings/<name>.asc` and the deb822 stanza in `/etc/apt/sources.list.d/<name>.sources`,
+addressed at the running distribution and release. Docker's engine needs a group to be usable
+without sudo, which is not managed here: `sudo usermod -aG docker $USER`, then log in again.
+
 Version lookups use the anonymous GitHub API, which allows 60 calls an hour per address. Set
 `GITHUB_TOKEN` if several hosts share one address; without it a rate-limited run keeps the
 installed version and warns, and only fails outright when the tool is not installed yet.
