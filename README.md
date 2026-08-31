@@ -7,10 +7,13 @@ declared in `provision/config.yaml`.
 ## Apply
 
 ```sh
-./provision/provision.py --dry-run     # report what would change
-./provision/provision.py               # apply
-./provision/provision.py --upgrade     # also re-check upstream versions
+./activate.sh --dry-run     # report what would change
+./activate.sh               # apply
+./activate.sh --upgrade     # also re-check upstream versions
 ```
+
+`activate.sh` is a one-line wrapper around `provision/provision.py`, which takes the same flags
+and can be called directly; either works from any directory.
 
 Desktop-only entries are applied when a graphical session is detected; force the decision
 with `--gui` / `--no-gui`. `--only <section>` limits the run to one of `apt`, `github`,
@@ -37,7 +40,7 @@ On a fresh Debian/Ubuntu host:
 
 ```sh
 sudo apt-get install -y python3-yaml
-./provision/provision.py
+./activate.sh
 ```
 
 `bootstrap-workstation.sh` adds the Ubuntu-desktop software this does not manage:
