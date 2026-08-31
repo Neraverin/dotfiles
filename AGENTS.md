@@ -8,6 +8,7 @@ Personal dotfiles for Linux/WSL machines, provisioned with the distribution's ow
 | Path | What it is |
 | --- | --- |
 | `provision/provision.py` | The whole tool: apt (packages and third-party repositories), GitHub releases, tarballs, npm, `go install`, fonts, dotfiles and the bash snippet, driven by `config.yaml`. |
+| `activate.sh` | One-line wrapper: execs `provision/provision.py` with the arguments it was given. |
 | `provision/config.yaml` | Full declaration of every host. `common` everywhere, `gui` merged on top on graphical hosts. |
 | `bootstrap-workstation.sh` | Ubuntu desktop only. Software `provision.py` does not handle: wezterm-nightly, telegram-desktop, happ, tailscale. |
 | `tailscale-up.sh` | Joins the Headscale tailnet (`TAILSCALE_LOGIN_SERVER` overrides the server). |
@@ -31,8 +32,8 @@ python3 -m py_compile provision/provision.py  # any Python edit
 asset template shows up without downloading anything. `--only <section>` narrows a run to
 `apt`, `github`, `archive`, `npm`, `go`, `fonts`, `files` or `shell`.
 
-`./provision/provision.py` without `--dry-run` changes the live machine — run it only when
-asked. The same goes for `migrate-from-nix.sh`, which is destructive by design.
+`./provision/provision.py` without `--dry-run` changes the live machine — and so does
+`./activate.sh`, which is only a wrapper around it. Run either only when asked. The same goes for `migrate-from-nix.sh`, which is destructive by design.
 
 ## Conventions
 
