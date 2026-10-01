@@ -11,4 +11,9 @@ config.window_background_opacity = 0.95
 -- "TITLE" makes WezTerm draw its own client-side decorations instead.
 config.window_decorations = "TITLE"
 
+-- Sized in terminal cells, not pixels: changing font_size above moves the
+-- window size with it, so these two want revisiting together.
+config.initial_cols = 167
+config.initial_rows = 46
+
 return config

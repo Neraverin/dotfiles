@@ -7,12 +7,12 @@ declared in `provision/config.yaml`.
 ## Apply
 
 ```sh
-./activate.sh --dry-run     # report what would change
-./activate.sh               # apply
-./activate.sh --upgrade     # also re-check upstream versions
+./apply.sh --dry-run     # report what would change
+./apply.sh                  # apply
+./apply.sh --upgrade     # also re-check upstream versions
 ```
 
-`activate.sh` is a one-line wrapper around `provision/provision.py`, which takes the same flags
+`apply.sh` is a one-line wrapper around `provision/provision.py`, which takes the same flags
 and can be called directly; either works from any directory.
 
 Desktop-only entries are applied when a graphical session is detected; force the decision
@@ -40,12 +40,14 @@ On a fresh Debian/Ubuntu host:
 
 ```sh
 sudo apt-get install -y python3-yaml
-./activate.sh
+./apply.sh
 ```
 
-`bootstrap-workstation.sh` adds the Ubuntu-desktop software this does not manage:
-wezterm-nightly, telegram-desktop, happ and tailscale. `./tailscale-up.sh` then joins the
-tailnet.
+`workstation.sh` applies the `workstation` section of `config.yaml` — the
+system-wide desktop software an ordinary run stays away from: wezterm-nightly,
+telegram-desktop, happ, claude-desktop and tailscale. It takes the same flags as
+`apply.sh` (`--dry-run`, `--verbose`, `--only`, `--upgrade`). `./tailscale-up.sh`
+then joins the tailnet.
 
 ## Migrating a host off Nix
 

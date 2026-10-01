@@ -14,298 +14,61 @@ that predates the tool is left where it is.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
-import tarfile
-import tempfile
 import urllib.error
 import urllib.request
-import zipfile
 from pathlib import Path
+
+from host import (
+    BIN_DIR,
+    DESKTOP_DIR,
+    FONT_DIR,
+    HOME,
+    NPM_PREFIX,
+    OPT_DIR,
+    REPO_ROOT,
+    SHELL_MARKER,
+    SHELL_SNIPPET,
+    STATE_PATH,
+    USER_AGENT,
+    child_env,
+    counts,
+    detail,
+    ensure_sudo,
+    expand,
+    extract_archive,
+    fetch,
+    fetch_text,
+    find_binary,
+    install_as_root,
+    link_bin,
+    load_state,
+    log,
+    note_installed,
+    note_removed,
+    note_skip,
+    note_warning,
+    read_root_file,
+    run,
+    save_state,
+    staging_area,
+    step_end,
+    step_start,
+    sudo,
+    username,
+    warn,
+)
 
 try:
     import yaml
 except ImportError:  # pragma: no cover - environment problem, not a code path
     sys.exit("PyYAML is missing. Install it with: sudo apt-get install -y python3-yaml")
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-HOME = Path.home()
-STATE_PATH = HOME / ".local/state/dotfiles/state.json"
-BIN_DIR = HOME / ".local/bin"
-OPT_DIR = HOME / ".local/opt"
-FONT_DIR = HOME / ".local/share/fonts"
-DESKTOP_DIR = HOME / ".local/share/applications"
-NPM_PREFIX = HOME / ".local"
-SHELL_SNIPPET = HOME / ".bashrc.d/50-dotfiles.sh"
-SHELL_MARKER = "# >>> dotfiles provision >>>"
-USER_AGENT = "provision.py (+https://github.com/neraverin/dotfiles)"
-
-installed: list[str] = []
-removed: list[str] = []
-warnings: list[str] = []
-skipped = 0
-step_open = False
-
-
-# --------------------------------------------------------------------------- io
-
-
-def log(message: str) -> None:
-    print(message)
-
-
-def detail(message: str) -> None:
-    print(f"  {message}")
-
-
-def warn(message: str) -> None:
-    warnings.append(message)
-    print(f"  warning: {message}")
-
-
-def note_warning(message: str) -> None:
-    """Record a warning whose text is already on the item's status line."""
-    warnings.append(message)
-
-
-def step_start(index: int, total: int, name: str) -> str:
-    """Open a numbered line for one item and leave it unfinished.
-
-    On a terminal the line reads "in progress" until step_end overwrites it, so
-    a long apt install shows which package it is on. Piped to a log there is no
-    cursor to rewrite, so the line is simply completed in place.
-    """
-    global step_open
-    step_open = True
-    label = f"  [{index}/{total}] {name}"
-    print(f"{label} ... in progress" if sys.stdout.isatty() else f"{label} ... ",
-          end="", flush=True)
-    return label
-
-
-def step_end(label: str, status: str) -> None:
-    global step_open
-    was_open, step_open = step_open, False
-
-    if not was_open:
-        # Command output was printed underneath, so repeat the item's name;
-        # a bare "done" several screens below its heading says nothing.
-        print(f"{label} ... {status}", flush=True)
-    elif sys.stdout.isatty():
-        # Pad to wipe whatever "in progress" left behind when status is shorter.
-        print(f"\r{label} ... {status}".ljust(len(label) + 20))
-    else:
-        print(status, flush=True)
-
-
-def break_step_line() -> None:
-    """Move off an unfinished step line before something else writes.
-
-    Only --verbose and a failing command print underneath an open item; both
-    would otherwise run into the trailing "... in progress".
-    """
-    global step_open
-    if step_open:
-        print(flush=True)
-        step_open = False
-
-
-def note_skip(count: int = 1) -> None:
-    global skipped
-    skipped += count
-
-
-def child_env() -> dict:
-    """Environment for child processes, with ~/.local/bin ahead of everything.
-
-    Sections run in order, so `go` must find the toolchain `archive` just placed;
-    the parent shell's PATH predates this run and cannot be relied on.
-    """
-    env = dict(os.environ)
-    env["PATH"] = f"{BIN_DIR}:{env.get('PATH', '')}"
-    return env
-
-
-def run(cmd: list[str], *, dry_run: bool, verbose: bool, check: bool = True) -> int:
-    """Run a command, hiding its output unless it fails or --verbose is set."""
-    if dry_run:
-        detail(f"would run: {' '.join(cmd)}")
-        return 0
-
-    if verbose:
-        break_step_line()
-        # A child writes straight to fd 1; anything still sitting in Python's
-        # buffer would surface after it and land out of order.
-        sys.stdout.flush()
-        return subprocess.run(cmd, check=check, env=child_env()).returncode
-
-    result = subprocess.run(cmd, capture_output=True, text=True, env=child_env())
-
-    if result.returncode != 0 and check:
-        break_step_line()
-        detail(f"command failed: {' '.join(cmd)}")
-        for line in (result.stdout + result.stderr).splitlines():
-            detail(f"    {line}")
-        raise SystemExit(1)
-
-    return result.returncode
-
-
-def sudo(cmd: list[str]) -> list[str]:
-    return cmd if os.geteuid() == 0 else ["sudo", *cmd]
-
-
-def ensure_sudo(*, dry_run: bool) -> None:
-    """Take the sudo password now, while a prompt can still be answered.
-
-    Every other command runs under capture_output, which swallows sudo's prompt
-    while sudo still waits on /dev/tty — a silent hang with nothing on screen.
-    Priming the timestamp here keeps the prompt visible and the later calls
-    non-interactive. Over `ssh host ./migrate-from-nix.sh` there is no terminal
-    at all, so an askpass helper is the only way through.
-    """
-    if dry_run or os.geteuid() == 0:
-        return
-
-    if subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode == 0:
-        return
-
-    if sys.stdin.isatty():
-        detail("apt needs root; sudo will ask for your password")
-        if subprocess.run(["sudo", "-v"]).returncode == 0:
-            return
-        raise SystemExit("sudo authentication failed")
-
-    if os.environ.get("SUDO_ASKPASS"):
-        detail("no terminal; asking sudo to use SUDO_ASKPASS")
-        if subprocess.run(["sudo", "-A", "-v"], capture_output=True).returncode == 0:
-            return
-        raise SystemExit("sudo authentication through SUDO_ASKPASS failed")
-
-    raise SystemExit(
-        "apt needs root, but there is no terminal to ask for a password on.\n"
-        "  Run this from an interactive shell, or point SUDO_ASKPASS at a helper,\n"
-        "  or prime the timestamp first with: sudo -v"
-    )
-
-
-def fetch(url: str, destination: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=120) as response:
-        with destination.open("wb") as handle:
-            shutil.copyfileobj(response, handle)
-
-    # A host-level scanner (IMA/EVM, or a corporate endpoint agent) can deny
-    # reads of a payload it dislikes, by content hash, after the write lands.
-    # The open fails with EPERM far away from here, so say what happened while
-    # the URL is still in hand.
-    try:
-        with destination.open("rb") as handle:
-            handle.read(1)
-    except PermissionError as error:
-        raise SystemExit(
-            f"{destination.name} downloaded but cannot be read back: {error.strerror}.\n"
-            f"  Source: {url}\n"
-            "  A local security policy is blocking this exact content — the download\n"
-            "  itself succeeded. Verify the checksum, then pin a different version or\n"
-            "  ask whoever runs endpoint security to allow it."
-        ) from error
-
-
-def fetch_text(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return response.read().decode()
-
-
-def expand(path: str) -> Path:
-    return Path(os.path.expanduser(os.path.expandvars(path)))
-
-
-def extract_archive(archive: Path, target: Path, *, strip: int = 0) -> None:
-    """Unpack into `target`, optionally dropping `strip` leading path components.
-
-    Upstream tarballs habitually wrap everything in a single versioned directory;
-    stripping it keeps ~/.local/opt/<name> stable across upgrades.
-    """
-    target.mkdir(parents=True, exist_ok=True)
-
-    if archive.name.endswith(".zip"):
-        with zipfile.ZipFile(archive) as handle:
-            if not strip:
-                handle.extractall(target)
-                return
-            for member in handle.infolist():
-                parts = Path(member.filename).parts[strip:]
-                if not parts:
-                    continue
-                out = target.joinpath(*parts)
-                if member.is_dir():
-                    out.mkdir(parents=True, exist_ok=True)
-                    continue
-                out.parent.mkdir(parents=True, exist_ok=True)
-                with handle.open(member) as source, out.open("wb") as sink:
-                    shutil.copyfileobj(source, sink)
-                if member.external_attr >> 16 & stat.S_IXUSR:
-                    out.chmod(0o755)
-        return
-
-    with tarfile.open(archive) as handle:
-        members = []
-        for member in handle.getmembers():
-            parts = Path(member.name).parts[strip:]
-            if not parts:
-                continue
-            member.name = str(Path(*parts))
-            members.append(member)
-        # filter="data" refuses absolute paths and traversal; Python 3.14 makes
-        # it the default, older interpreters need it spelled out.
-        try:
-            handle.extractall(target, members=members, filter="data")
-        except TypeError:  # pragma: no cover - Python < 3.12
-            handle.extractall(target, members=members)
-
-
-@contextlib.contextmanager
-def staging_area(base: Path):
-    """A scratch directory on the same filesystem as `base`.
-
-    The system temp dir is the wrong place for these payloads: it is often a
-    small tmpfs, and unpacking there means the finished tree has to be copied
-    across a filesystem boundary — twice the peak space, and a half-written
-    destination when the disk fills. Staging next to the target makes the final
-    move a rename.
-    """
-    base.mkdir(parents=True, exist_ok=True)
-    path = Path(tempfile.mkdtemp(dir=base, prefix=".staging-"))
-    try:
-        yield path
-    finally:
-        shutil.rmtree(path, ignore_errors=True)
-
-
-def find_binary(root: Path, name: str) -> Path:
-    """Locate a binary by name; upstream archives disagree about nesting."""
-    matches = [p for p in root.rglob(name) if p.is_file()]
-    if not matches:
-        raise SystemExit(f"{name} was not found inside the downloaded archive")
-    return min(matches, key=lambda p: len(p.parts))
-
-
-def link_bin(source: Path, name: str) -> Path:
-    """Point ~/.local/bin/<name> at `source`, replacing whatever was there."""
-    BIN_DIR.mkdir(parents=True, exist_ok=True)
-    destination = BIN_DIR / name
-    if destination.is_symlink() or destination.exists():
-        destination.unlink()
-    destination.symlink_to(source)
-    return destination
 
 
 # ------------------------------------------------------------------ gui detection
@@ -352,42 +115,6 @@ def detect_gui() -> tuple[bool, str]:
             return False, f"systemd default target is {target}"
 
     return False, "no desktop software installed"
-
-
-# --------------------------------------------------------------------------- state
-
-EMPTY_STATE = {
-    "apt": {"packages": [], "links": {}, "repos": []},
-    "github": {},
-    "archive": {},
-    "npm": {},
-    "go": {},
-    "fonts": {},
-    "files": [],
-}
-
-
-def load_state() -> dict:
-    state = json.loads(STATE_PATH.read_text()) if STATE_PATH.exists() else {}
-
-    for key, default in EMPTY_STATE.items():
-        state.setdefault(key, json.loads(json.dumps(default)))
-
-    # The prototype recorded apt as a bare list; keep those entries owned.
-    if isinstance(state["apt"], list):
-        state["apt"] = {"packages": state["apt"], "links": {}}
-
-    for key, default in EMPTY_STATE["apt"].items():
-        state["apt"].setdefault(key, json.loads(json.dumps(default)))
-
-    return state
-
-
-def save_state(state: dict, *, dry_run: bool) -> None:
-    if dry_run:
-        return
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
 # ------------------------------------------------------------- apt repositories
@@ -452,6 +179,20 @@ def render_apt_repo(name: str, spec: dict, facts: dict) -> str:
     return "".join(f"{key}: {value}\n" for key, value in fields.items())
 
 
+def key_fingerprint(path: Path) -> str:
+    """Primary key fingerprint, or "" when the file holds no usable key."""
+    result = subprocess.run(
+        ["gpg", "--show-keys", "--with-colons", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    for line in result.stdout.splitlines():
+        fields = line.split(":")
+        if fields[0] == "fpr":
+            return fields[9]
+    return ""
+
+
 def apt_repo_reachable(spec: dict, facts: dict) -> bool:
     """Does the repository actually carry a suite for this release?
 
@@ -475,31 +216,9 @@ def apt_repo_reachable(spec: dict, facts: dict) -> bool:
         return False
 
 
-def install_as_root(content: bytes, destination: Path, *, verbose: bool) -> None:
-    with staging_area(STATE_PATH.parent) as staging:
-        source = staging / destination.name
-        source.write_bytes(content)
-        run(
-            sudo(
-                # -D creates /etc/apt/keyrings on hosts old enough not to have it.
-                ["install", "-D", "-o", "root", "-g", "root", "-m", "0644"]
-                + [str(source), str(destination)]
-            ),
-            dry_run=False,
-            verbose=verbose,
-        )
-
-
-def read_root_file(path: Path) -> str:
-    try:
-        return path.read_text()
-    except OSError:
-        return ""
-
-
-def sync_apt_repos(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> bool:
+def sync_apt_repos(desired: dict, bucket: dict, *, dry_run: bool, verbose: bool) -> bool:
     """Write the declared repositories. True when apt has to re-read its lists."""
-    owned = list(state["apt"]["repos"])
+    owned = list(bucket["repos"])
     stale = [name for name in owned if name not in desired]
 
     if not desired and not stale:
@@ -511,7 +230,7 @@ def sync_apt_repos(desired: dict, state: dict, *, dry_run: bool, verbose: bool) 
 
     for index, (name, spec) in enumerate(desired.items(), start=1):
         if not facts["id"] or not facts["codename"]:
-            note_warning(
+            warn(
                 f"{name}: /etc/os-release names no distribution and release; "
                 "repository skipped"
             )
@@ -520,6 +239,28 @@ def sync_apt_repos(desired: dict, state: dict, *, dry_run: bool, verbose: bool) 
         stanza = render_apt_repo(name, spec, facts)
         sources = apt_sources_path(name)
         current = read_root_file(sources)
+
+        # Files some packages read *before* they are configured — the one case
+        # so far is a package whose postinst registers a second copy of this
+        # repository unless told not to. They belong to the repository entry
+        # rather than to the package, because they have to exist before apt
+        # runs, and they are recorded in state so dropping the entry can take
+        # them away again.
+        declared_files = {
+            path: content for path, content in (spec.get("files") or {}).items()
+        }
+        for path, content in declared_files.items():
+            target = Path(path)
+            if read_root_file(target) == content:
+                continue
+            if dry_run:
+                detail(f"{name}: would write {target}")
+            else:
+                ensure_sudo(dry_run=False)
+                install_as_root(content.encode(), target, verbose=verbose)
+                detail(f"{name}: wrote {target}")
+            changed = True
+        bucket["repo_files"][name] = sorted(declared_files)
 
         if current == stanza and apt_key_path(name).exists():
             detail(f"{name}: repository already configured")
@@ -531,11 +272,11 @@ def sync_apt_repos(desired: dict, state: dict, *, dry_run: bool, verbose: bool) 
         # Same rule as for packages: a file this tool did not write is not ours
         # to rewrite, and never becomes ours to remove.
         if current and name not in owned:
-            note_warning(f"{name}: {sources} was not written here; left alone")
+            warn(f"{name}: {sources} was not written here; left alone")
             continue
 
         if not apt_repo_reachable(spec, facts):
-            note_warning(
+            warn(
                 f"{name}: no {facts['codename']} suite at "
                 f"{apt_repo_field(spec['uri'], facts)}; repository skipped"
             )
@@ -543,7 +284,7 @@ def sync_apt_repos(desired: dict, state: dict, *, dry_run: bool, verbose: bool) 
 
         if dry_run:
             detail(f"{name}: would add {apt_repo_field(spec['uri'], facts)}")
-            installed.append(f"{name} repository")
+            note_installed(f"{name} repository")
             changed = True
             continue
 
@@ -553,19 +294,32 @@ def sync_apt_repos(desired: dict, state: dict, *, dry_run: bool, verbose: bool) 
             with staging_area(STATE_PATH.parent) as staging:
                 key = staging / f"{name}.asc"
                 fetch(apt_repo_field(spec["key"], facts), key)
+                # A wrong or truncated key only surfaces later, as NO_PUBKEY on
+                # every apt-get update on the host. Upstreams that publish a
+                # fingerprint let us catch it while it is still attributable.
+                expected = spec.get("fingerprint")
+                if expected:
+                    actual = key_fingerprint(key)
+                    if actual != expected:
+                        step_end(label, "failed")
+                        raise SystemExit(
+                            f"{name}: key fingerprint {actual or 'none'}, "
+                            f"expected {expected}"
+                        )
                 install_as_root(key.read_bytes(), apt_key_path(name), verbose=verbose)
             install_as_root(stanza.encode(), sources, verbose=verbose)
         except SystemExit:
             step_end(label, "failed")
             raise
         step_end(label, "added")
-        installed.append(f"{name} repository")
+        note_installed(f"{name} repository")
         if name not in keep:
             keep.append(name)
         changed = True
 
     for name in stale:
         paths = [apt_sources_path(name), apt_key_path(name)]
+        paths += [Path(p) for p in bucket["repo_files"].pop(name, [])]
         if not any(path.exists() for path in paths):
             continue
         if dry_run:
@@ -578,10 +332,10 @@ def sync_apt_repos(desired: dict, state: dict, *, dry_run: bool, verbose: bool) 
                 verbose=verbose,
             )
             detail(f"{name}: repository removed")
-        removed.append(f"{name} repository")
+        note_removed(f"{name} repository")
         changed = True
 
-    state["apt"]["repos"] = sorted(keep)
+    bucket["repos"] = sorted(keep)
     return changed
 
 
@@ -602,25 +356,25 @@ def apt_version(package: str) -> str:
     return result.stdout.strip() or "unknown"
 
 
-def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> None:
+def sync_apt(
+    desired: dict, bucket: dict, *, dry_run: bool, verbose: bool, heading: str = "apt"
+) -> None:
     packages = desired.get("packages") or []
     links = desired.get("links") or {}
     repos = desired.get("repos") or {}
 
-    if not packages and not state["apt"]["packages"] and not repos:
+    if not packages and not bucket["packages"] and not repos:
         return
 
-    log("apt")
+    log(heading)
 
     # Repositories first: a package below may only exist in one of them.
-    repos_changed = sync_apt_repos(
-        repos, state, dry_run=dry_run, verbose=verbose
-    )
+    repos_changed = sync_apt_repos(repos, bucket, dry_run=dry_run, verbose=verbose)
 
     missing = [p for p in packages if not dpkg_installed(p)]
     stale = [
         p
-        for p in state["apt"]["packages"]
+        for p in bucket["packages"]
         if p not in packages and dpkg_installed(p)
     ]
 
@@ -636,7 +390,7 @@ def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> Non
     for index, package in enumerate(missing, start=1):
         if dry_run:
             detail(f"[{index}/{len(missing)}] {package} ... would install")
-            installed.append(package)
+            note_installed(package)
             continue
 
         label = step_start(index, len(missing), package)
@@ -650,14 +404,14 @@ def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> Non
             step_end(label, "failed")
             raise
         step_end(label, f"done ({apt_version(package)})")
-        installed.append(package)
+        note_installed(package)
 
     # Only packages this tool installed are ever removed; anything the
     # distribution or the user brought in is left alone.
     for index, package in enumerate(stale, start=1):
         if dry_run:
             detail(f"[{index}/{len(stale)}] {package} ... would remove")
-            removed.append(package)
+            note_removed(package)
             continue
 
         label = step_start(index, len(stale), package)
@@ -671,7 +425,7 @@ def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> Non
             step_end(label, "failed")
             raise
         step_end(label, "removed")
-        removed.append(package)
+        note_removed(package)
 
     current = len(packages) - len(missing)
     if current:
@@ -680,13 +434,13 @@ def sync_apt(desired: dict, state: dict, *, dry_run: bool, verbose: bool) -> Non
 
     # Record only what we installed, so a package that predates this tool is
     # never treated as ours on a later run.
-    owned = set(state["apt"]["packages"]) | set(missing)
-    state["apt"]["packages"] = sorted(owned & set(packages))
+    owned = set(bucket["packages"]) | set(missing)
+    bucket["packages"] = sorted(owned & set(packages))
 
-    sync_apt_links(links, state, dry_run=dry_run)
+    sync_apt_links(links, bucket, dry_run=dry_run)
 
 
-def sync_apt_links(links: dict, state: dict, *, dry_run: bool) -> None:
+def sync_apt_links(links: dict, bucket: dict, *, dry_run: bool) -> None:
     for distro_name, wanted in links.items():
         source = shutil.which(distro_name)
         destination = BIN_DIR / wanted
@@ -709,17 +463,231 @@ def sync_apt_links(links: dict, state: dict, *, dry_run: bool) -> None:
 
         link_bin(Path(source), wanted)
         detail(f"{wanted}: linked to {source}")
-        installed.append(wanted)
+        note_installed(wanted)
 
-    for wanted in [w for w in state["apt"]["links"].values() if w not in links.values()]:
+    for wanted in [w for w in bucket["links"].values() if w not in links.values()]:
         path = BIN_DIR / wanted
         if path.is_symlink():
             if not dry_run:
                 path.unlink()
             detail(f"{wanted}: link removed")
-            removed.append(wanted)
+            note_removed(wanted)
 
-    state["apt"]["links"] = dict(links)
+    bucket["links"] = dict(links)
+
+
+# ---------------------------------------------- snap, vendor debs, vendor scripts
+#
+# Three ways desktop software arrives that apt cannot describe on its own. They
+# are declared like every other source, but unlike the rest of this tool they
+# install system-wide, so they are reached only through the `workstation`
+# section — never from a plain run.
+
+
+def snap_version(name: str) -> str:
+    result = subprocess.run(["snap", "list", name], capture_output=True, text=True)
+    if result.returncode != 0:
+        return ""
+    lines = result.stdout.splitlines()
+    return lines[1].split()[1] if len(lines) > 1 else ""
+
+
+def sync_snap(desired: list, bucket: dict, *, dry_run: bool, verbose: bool) -> None:
+    owned = list(bucket["snap"])
+    stale = [name for name in owned if name not in desired]
+
+    if not desired and not stale:
+        return
+
+    log("snap")
+
+    for index, name in enumerate(desired, start=1):
+        version = snap_version(name)
+        if version:
+            detail(f"{name}: already at {version}")
+            note_skip()
+            if name not in owned:
+                owned.append(name)
+            continue
+
+        if dry_run:
+            detail(f"{name}: would install")
+            note_installed(name)
+            continue
+
+        ensure_sudo(dry_run=False)
+        label = step_start(index, len(desired), name)
+        run(sudo(["snap", "install", name]), dry_run=False, verbose=verbose)
+        step_end(label, f"installed {snap_version(name) or 'unknown'}")
+        note_installed(name)
+        if name not in owned:
+            owned.append(name)
+
+    for name in stale:
+        if not snap_version(name):
+            owned.remove(name)
+            continue
+        if dry_run:
+            detail(f"{name}: would remove")
+        else:
+            ensure_sudo(dry_run=False)
+            run(sudo(["snap", "remove", name]), dry_run=False, verbose=verbose)
+            detail(f"{name}: removed")
+        note_removed(name)
+        owned.remove(name)
+
+    bucket["snap"] = sorted(set(owned) & set(desired)) if not dry_run else owned
+    log("")
+
+
+def deb_version(package: str) -> str:
+    result = subprocess.run(
+        ["dpkg-query", "-W", "-f=${Version}", package], capture_output=True, text=True
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def sync_deb(
+    desired: dict, bucket: dict, *, dry_run: bool, verbose: bool, upgrade: bool
+) -> None:
+    """Packages published as a .deb on a GitHub release and nowhere else."""
+    owned = dict(bucket["deb"])
+    stale = [name for name in owned if name not in desired]
+
+    if not desired and not stale:
+        return
+
+    log("deb")
+    facts = host_facts()
+
+    for index, (name, spec) in enumerate(desired.items(), start=1):
+        package = spec.get("package", name)
+        # Upstreams label their assets by their own architecture names.
+        asset_arch = (spec.get("arch") or {}).get(facts["arch"])
+        if asset_arch is None:
+            note_warning(f"{name}: no build for {facts['arch']}; skipped")
+            continue
+
+        present = deb_version(package)
+        known = owned.get(name)
+
+        # Same rule as the github source: an installed package is left alone
+        # until --upgrade, which keeps an ordinary run offline and fast.
+        if known and present and not upgrade:
+            detail(f"{name}: already at {present}")
+            note_skip()
+            continue
+
+        try:
+            tag = spec.get("version") or github_latest_tag(spec["repo"])
+        except UpstreamUnavailable as error:
+            if present:
+                note_warning(f"{name}: {error}; keeping {present}")
+                continue
+            raise SystemExit(str(error)) from error
+
+        # Some upstreams add a build suffix (4.1.1-312) the release tag lacks.
+        if present and present.split("-")[0] == tag.lstrip("v"):
+            detail(f"{name}: already at {present}")
+            note_skip()
+            owned[name] = {"version": tag, "package": package}
+            continue
+
+        asset = spec["asset"].format(
+            version=tag, version_strip=tag.lstrip("v"), arch=asset_arch
+        )
+        url = f"https://github.com/{spec['repo']}/releases/download/{tag}/{asset}"
+
+        if dry_run:
+            detail(f"{name}: would fetch {tag} from {url}")
+            note_installed(name)
+            continue
+
+        ensure_sudo(dry_run=False)
+        label = step_start(index, len(desired), name)
+        with staging_area(STATE_PATH.parent) as staging:
+            payload = staging / asset
+            fetch(url, payload)
+            run(
+                sudo(["apt-get", "install", "-y", str(payload)]),
+                dry_run=False,
+                verbose=verbose,
+            )
+        step_end(label, f"installed {deb_version(package) or tag}")
+        note_installed(name)
+        owned[name] = {"version": tag, "package": package}
+
+    for name in stale:
+        package = owned[name]["package"]
+        if deb_version(package):
+            if dry_run:
+                detail(f"{name}: would remove")
+            else:
+                ensure_sudo(dry_run=False)
+                run(
+                    sudo(["apt-get", "remove", "-y", package]),
+                    dry_run=False,
+                    verbose=verbose,
+                )
+                detail(f"{name}: removed")
+            note_removed(name)
+        owned.pop(name)
+
+    bucket["deb"] = owned
+    log("")
+
+
+def sync_script(desired: dict, bucket: dict, *, dry_run: bool, verbose: bool) -> None:
+    """Upstreams whose only supported install is a shell script they host.
+
+    The script is run once, when the command it provides is missing. Anything
+    under `post` is re-applied on every run instead: it is cheap, and a package
+    reinstall or a logout drops it.
+    """
+    owned = dict(bucket["script"])
+    stale = [name for name in owned if name not in desired]
+
+    if not desired and not stale:
+        return
+
+    log("script")
+
+    for index, (name, spec) in enumerate(desired.items(), start=1):
+        probe = spec.get("probe", name)
+
+        if shutil.which(probe):
+            detail(f"{name}: already installed")
+            note_skip()
+        elif dry_run:
+            detail(f"{name}: would run {spec['url']}")
+            note_installed(name)
+        else:
+            ensure_sudo(dry_run=False)
+            label = step_start(index, len(desired), name)
+            with staging_area(STATE_PATH.parent) as staging:
+                installer = staging / "install.sh"
+                fetch(spec["url"], installer)
+                installer.chmod(0o755)
+                run(sudo([str(installer)]), dry_run=False, verbose=verbose)
+            step_end(label, "installed")
+            note_installed(name)
+
+        owned[name] = {"probe": probe}
+
+        for command in spec.get("post") or []:
+            rendered = [part.format(user=username()) for part in command]
+            run(rendered, dry_run=dry_run, verbose=verbose)
+
+    for name in stale:
+        # A vendor installer carries no uninstall, and guessing at one would
+        # mean deleting files this tool never saw. Say so and leave it.
+        note_warning(
+            f"{name}: installed by a vendor script; remove it by hand if unwanted"
+        )
+        owned.pop(name)
+
+    bucket["script"] = owned
+    log("")
 
 
 # ------------------------------------------------------------------------ github
@@ -820,7 +788,7 @@ def install_github(
                 placed.append(str(destination))
 
     state["github"][name] = {"version": tag, "files": placed}
-    installed.append(name)
+    note_installed(name)
     return f"done ({tag})"
 
 
@@ -848,7 +816,7 @@ def sync_github(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> 
             else:
                 Path(path).unlink(missing_ok=True)
         detail(f"{name}: removed")
-        removed.append(name)
+        note_removed(name)
         if not dry_run:
             del state["github"][name]
 
@@ -998,7 +966,7 @@ def install_archive(
         "links": links,
         "desktop": install_desktop_entries(name, target, spec),
     }
-    installed.append(name)
+    note_installed(name)
     return f"done ({version})"
 
 
@@ -1028,7 +996,7 @@ def sync_archive(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) ->
             Path(path).unlink(missing_ok=True)
         shutil.rmtree(entry["dir"], ignore_errors=True)
         detail(f"{name}: removed")
-        removed.append(name)
+        note_removed(name)
         del state["archive"][name]
 
 
@@ -1102,7 +1070,7 @@ def sync_npm(
 
         version = npm_installed_version(package) or "unknown"
         step_end(label, f"done ({version})")
-        installed.append(package)
+        note_installed(package)
         state["npm"][package] = version
 
     for package in [p for p in list(state["npm"]) if p not in desired]:
@@ -1113,7 +1081,7 @@ def sync_npm(
             check=False,
         )
         detail(f"{package}: removed")
-        removed.append(package)
+        note_removed(package)
         if not dry_run:
             del state["npm"][package]
 
@@ -1166,7 +1134,7 @@ def sync_go(
             continue
 
         step_end(label, "done")
-        installed.append(name)
+        note_installed(name)
         state["go"][name] = package
 
     for name in [n for n in list(state["go"]) if n not in desired]:
@@ -1175,7 +1143,7 @@ def sync_go(
             continue
         (BIN_DIR / name).unlink(missing_ok=True)
         detail(f"{name}: removed")
-        removed.append(name)
+        note_removed(name)
         del state["go"][name]
 
 
@@ -1239,7 +1207,7 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
 
         state["fonts"][name] = {"version": tag, "dir": str(target)}
         step_end(label, f"done ({tag})")
-        installed.append(name)
+        note_installed(name)
         touched = True
 
     for name in [n for n in list(state["fonts"]) if n not in desired]:
@@ -1248,7 +1216,7 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
             continue
         shutil.rmtree(state["fonts"][name]["dir"], ignore_errors=True)
         detail(f"{name}: removed")
-        removed.append(name)
+        note_removed(name)
         del state["fonts"][name]
         touched = True
 
@@ -1296,7 +1264,7 @@ def sync_files(
         shutil.copyfile(origin, destination)
         destination.chmod(0o644)
         detail(f"{target}: written")
-        installed.append(target)
+        note_installed(target)
 
     for target, value in seeds.items():
         destination = expand(target)
@@ -1315,7 +1283,7 @@ def sync_files(
         shutil.copyfile(REPO_ROOT / source, destination)
         destination.chmod(mode)
         detail(f"{target}: seeded")
-        installed.append(target)
+        note_installed(target)
 
     for target, entries in lines.items():
         destination = expand(target)
@@ -1341,7 +1309,7 @@ def sync_files(
         with destination.open("a") as handle:
             handle.write(prefix + "\n".join(additions) + "\n")
         detail(f"{target}: appended {len(additions)} line(s)")
-        installed.append(target)
+        note_installed(target)
 
     for path in [p for p in state["files"] if p not in managed]:
         if dry_run:
@@ -1349,7 +1317,7 @@ def sync_files(
         else:
             Path(path).unlink(missing_ok=True)
         detail(f"{path}: removed")
-        removed.append(path)
+        note_removed(path)
 
     state["files"] = sorted(managed)
 
@@ -1405,7 +1373,7 @@ def sync_shell(shell: dict, *, dry_run: bool) -> None:
         SHELL_SNIPPET.parent.mkdir(parents=True, exist_ok=True)
         SHELL_SNIPPET.write_text(content)
         detail(f"snippet: written to {SHELL_SNIPPET}")
-        installed.append(str(SHELL_SNIPPET))
+        note_installed(str(SHELL_SNIPPET))
 
     # The distribution's ~/.bashrc keeps its own content; it only gains one
     # guarded line, which is why no backup of the original is ever needed.
@@ -1422,7 +1390,7 @@ def sync_shell(shell: dict, *, dry_run: bool) -> None:
         with bashrc.open("a") as handle:
             handle.write(f"\n{hook}\n")
         detail("~/.bashrc: source line appended")
-        installed.append("~/.bashrc")
+        note_installed("~/.bashrc")
 
 
 # -------------------------------------------------------------------------- main
@@ -1470,6 +1438,68 @@ def check_platform() -> None:
         )
 
 
+def run_workstation(
+    spec: dict,
+    config_path: str,
+    *,
+    sections: set | None,
+    dry_run: bool,
+    verbose: bool,
+    upgrade: bool,
+) -> None:
+    """Reconcile the system-wide desktop software, and nothing else.
+
+    Kept apart from the ordinary run on purpose. These entries install outside
+    $HOME and exist on one host, so an ordinary `./apply.sh` — which never
+    declares them — must not read their absence as an instruction to remove
+    them. They get their own state bucket for the same reason.
+    """
+    log(f"Config:  {config_path}")
+    log(f"Mode:    {'dry run' if dry_run else 'apply'}")
+    log("Scope:   workstation")
+    log("")
+
+    state = load_state()
+    bucket = state["workstation"]
+
+    def wanted(section: str) -> bool:
+        return sections is None or section in sections
+
+    try:
+        if wanted("apt"):
+            sync_apt(
+                spec.get("apt") or {},
+                bucket,
+                dry_run=dry_run,
+                verbose=verbose,
+                heading="apt",
+            )
+        if wanted("snap"):
+            sync_snap(spec.get("snap") or [], bucket, dry_run=dry_run, verbose=verbose)
+        if wanted("deb"):
+            sync_deb(
+                spec.get("deb") or {},
+                bucket,
+                dry_run=dry_run,
+                verbose=verbose,
+                upgrade=upgrade,
+            )
+        if wanted("script"):
+            sync_script(
+                spec.get("script") or {}, bucket, dry_run=dry_run, verbose=verbose
+            )
+    finally:
+        save_state(state, dry_run=dry_run)
+
+    changed, current, gone, problems = counts()
+    verb = "would change" if dry_run else "changed"
+    log("")
+    log(
+        f"Done. {changed} {verb}, {current} already current, "
+        f"{gone} removed, {problems} warning(s)."
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default=str(Path(__file__).parent / "config.yaml"))
@@ -1491,8 +1521,26 @@ def main() -> None:
     parser.add_argument(
         "--only",
         action="append",
-        choices=["apt", "github", "archive", "npm", "go", "fonts", "files", "shell"],
+        choices=[
+            "apt",
+            "github",
+            "archive",
+            "npm",
+            "go",
+            "fonts",
+            "files",
+            "shell",
+            # --workstation only
+            "snap",
+            "deb",
+            "script",
+        ],
         help="run just these sections (repeatable)",
+    )
+    parser.add_argument(
+        "--workstation",
+        action="store_true",
+        help="reconcile the workstation section instead of the usual ones",
     )
     args = parser.parse_args()
 
@@ -1501,6 +1549,17 @@ def main() -> None:
     config = yaml.safe_load(Path(args.config).read_text()) or {}
     common = config.get("common") or {}
     gui_section = config.get("gui") or {}
+
+    if args.workstation:
+        run_workstation(
+            config.get("workstation") or {},
+            args.config,
+            sections=set(args.only) if args.only else None,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            upgrade=args.upgrade,
+        )
+        return
 
     if args.gui is None:
         want_gui, reason = detect_gui()
@@ -1528,7 +1587,7 @@ def main() -> None:
         if wanted("apt"):
             sync_apt(
                 merge_apt(common, gui),
-                state,
+                state["apt"],
                 dry_run=args.dry_run,
                 verbose=args.verbose,
             )
@@ -1585,9 +1644,10 @@ def main() -> None:
 
     log("")
     verb = "would change" if args.dry_run else "changed"
+    changed, current, gone, problems = counts()
     log(
-        f"Done. {len(installed)} {verb}, {skipped} already current, "
-        f"{len(removed)} removed, {len(warnings)} warning(s)."
+        f"Done. {changed} {verb}, {current} already current, "
+        f"{gone} removed, {problems} warning(s)."
     )
 
 
