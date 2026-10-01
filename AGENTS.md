@@ -7,13 +7,15 @@ Personal dotfiles for Linux/WSL machines, provisioned with the distribution's ow
 
 | Path | What it is |
 | --- | --- |
+| `provision/host.py` | How the repository talks to the host: sudo handling, step lines, fetch/staging, the run counters and the state file. |
 | `provision/provision.py` | The whole tool: apt (packages and third-party repositories), GitHub releases, tarballs, npm, `go install`, fonts, dotfiles and the bash snippet, driven by `config.yaml`. |
-| `activate.sh` | One-line wrapper: execs `provision/provision.py` with the arguments it was given. |
-| `provision/config.yaml` | Full declaration of every host. `common` everywhere, `gui` merged on top on graphical hosts. |
-| `bootstrap-workstation.sh` | Ubuntu desktop only. Software `provision.py` does not handle: wezterm-nightly, telegram-desktop, happ, tailscale. |
+| `apply.sh` | One-line wrapper: execs `provision/provision.py` with the arguments it was given. |
+| `provision/config.yaml` | Full declaration of every host. `common` everywhere, `gui` merged on top on graphical hosts, `workstation` only under `--workstation`. |
+| `provision/workstation.py` | Front door for the `workstation` section: adds `--workstation` and hands everything else to `provision.py`. |
+| `workstation.sh` | One-line wrapper: execs `provision/workstation.py` with the arguments it was given. |
 | `tailscale-up.sh` | Joins the Headscale tailnet (`TAILSCALE_LOGIN_SERVER` overrides the server). |
 | `migrate-from-nix.sh` | For hosts still on the old Nix/home-manager setup: deactivates it, restores the dotfiles it displaced, runs `provision.py`, and with `--purge-nix` deletes Nix itself. |
-| `claude/`, `codex/`, `starship/`, `wezterm/` | Payload files referenced from `provision/config.yaml`. |
+| `files/` | Payload files referenced from `provision/config.yaml`, one directory per application. |
 
 The Nix flake and its home-manager module were removed from the working tree. They are still
 in history — check out the commit before their deletion if a host needs them back, which is why
@@ -24,16 +26,18 @@ in history — check out the commit before their deletion if a host needs them b
 ```sh
 ./provision/provision.py --dry-run --gui      # any config.yaml or provision.py edit
 ./provision/provision.py --dry-run --no-gui   # ...run both, they cover different halves
+./workstation.sh --dry-run                    # any workstation: edit
 bash -n script.sh && shellcheck script.sh     # any shell edit
-python3 -m py_compile provision/provision.py  # any Python edit
+python3 -m py_compile provision/*.py          # any Python edit
 ```
 
 `--dry-run` resolves every upstream version and prints the URLs it would fetch, so a broken
 asset template shows up without downloading anything. `--only <section>` narrows a run to
-`apt`, `github`, `archive`, `npm`, `go`, `fonts`, `files` or `shell`.
+`apt`, `github`, `archive`, `npm`, `go`, `fonts`, `files` or `shell` — and under
+`--workstation`, to `apt`, `snap`, `deb` or `script`.
 
 `./provision/provision.py` without `--dry-run` changes the live machine — and so does
-`./activate.sh`, which is only a wrapper around it. Run either only when asked. The same goes for `migrate-from-nix.sh`, which is destructive by design.
+`./apply.sh`, which is only a wrapper around it. Run either only when asked. The same goes for `migrate-from-nix.sh`, which is destructive by design.
 
 ## Conventions
 
@@ -71,9 +75,11 @@ any change reaches all of them:
   `graphical.target` on a server with no X and no display manager.
 - Everything lands under `$HOME`. Check the target host has room: `$HOME` is a small separate
   partition on some of them, and the Go toolchain plus npm globals alone run past a gigabyte.
-- `provision.py` installs nothing system-wide except apt packages. Anything needing snap, a
-  vendor repo or a GUI belongs in `bootstrap-workstation.sh`, which targets the Ubuntu desktop
-  alone and never runs on the servers.
+- `provision.py` installs nothing system-wide except apt packages, *unless* it is run with
+  `--workstation`. Snaps, vendor installers and desktop-only system packages go in the
+  `workstation` section, which only `./workstation.sh` reaches and which keeps its
+  own state bucket: an ordinary `./apply.sh` never declares any of it, and must not read
+  that silence as an instruction to uninstall it.
 
 ## Distribution quirks worth remembering
 
