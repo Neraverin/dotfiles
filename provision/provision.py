@@ -1047,14 +1047,20 @@ def sync_npm(
             state["npm"][package] = current
             continue
 
-        latest = npm_latest_version(package) if current else None
+        # A dry run looks the version up even for a fresh install: a bare
+        # "would install" hides what the real run is about to pull.
+        latest = npm_latest_version(package) if current or dry_run else None
         if current and latest == current:
             step_end(label, f"already at {current}")
             note_skip()
             continue
 
         if dry_run:
-            step_end(label, "would install")
+            target = latest or "latest"
+            if current:
+                step_end(label, f"would upgrade {current} → {target}")
+            else:
+                step_end(label, f"would install {target}")
             note_installed(package)
             continue
 
