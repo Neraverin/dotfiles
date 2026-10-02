@@ -16,13 +16,12 @@
 #   seeds    dotfiles the application rewrites itself, created once
 #   lines    single lines appended to a foreign config unless already present
 #   shell    rendered into ~/.bashrc.d/50-dotfiles.sh
+#   snap     snaps                                          (gui only)
+#   deb      a .deb from a GitHub release                   (gui only)
+#   script   a vendor installer, plus commands re-run after (gui only)
 #
-# `workstation` is separate from all of that: system-wide desktop software,
-# applied only by ./workstation.sh. Its sources are `apt` (as above),
-# `snap`, `deb` (a .deb from a GitHub release) and `script` (a vendor installer).
-#
-# Kept deliberately host-agnostic: nothing here may assume a graphical session,
-# a specific distribution, or a path outside $HOME.
+# `common` is kept deliberately host-agnostic: nothing there may assume a
+# graphical session, a specific distribution, or a path outside $HOME.
 
 common:
   # Distribution packages. Anything Debian 12 — the oldest host — ships in a
@@ -175,7 +174,40 @@ common:
       - '  fi'
       - 'fi'
 
+# Desktop applications, merged on top of `common` when a desktop is detected or
+# --gui is given. Unlike `common`, part of this installs system-wide — vendor
+# apt repositories, snaps, a .deb, a vendor installer — which is acceptable only
+# because it never reaches a headless host. Without a desktop, or with
+# --no-gui, the section is skipped and nothing it installed is removed; only
+# deleting an entry here uninstalls it.
 gui:
+  apt:
+    repos:
+      wezterm:
+        # No wezterm in the Ubuntu archive at all, and the nightly channel is
+        # the one followed here, so upstream's own repository is the only source.
+        key: https://apt.fury.io/wez/gpg.key
+        uri: https://apt.fury.io/wez/
+        # Fury serves one flat tree: there is no suite or component to name.
+        suites: "*"
+        components: "*"
+      claude-desktop:
+        # Anthropic publishes one suite for every distribution, so the usual
+        # {codename} template does not apply here.
+        key: https://downloads.claude.ai/claude-desktop/key.asc
+        fingerprint: 31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
+        uri: https://downloads.claude.ai/claude-desktop/apt/stable
+        suites: stable
+        files:
+          # The package's postinst registers this repository a second time as a
+          # one-line .list, and apt then warns about the duplicate on every
+          # update. It reads this file and skips its own registration.
+          /etc/default/claude-desktop: |
+            CLAUDE_DESKTOP_ADD_REPO="false"
+    packages:
+      - claude-desktop
+      - wezterm-nightly
+
   archive:
     deadbeef:
       # Not in the Ubuntu 26.04 archive and with no GitHub release; upstream's
@@ -211,39 +243,6 @@ gui:
     ~/.config/deadbeef/config:
       - match: '^output_plugin '
         line: output_plugin pulseaudio
-
-# System-wide desktop software for the Ubuntu workstation. Reached only through
-# ./workstation.sh, which is `provision.py --workstation`; an ordinary
-# run never declares any of this, so it is kept out of `gui` and given its own
-# state bucket — otherwise every ./apply.sh would read the silence as an
-# instruction to uninstall it all.
-workstation:
-  apt:
-    repos:
-      wezterm:
-        # No wezterm in the Ubuntu archive at all, and this host follows the
-        # nightly channel, so upstream's own repository is the only source.
-        key: https://apt.fury.io/wez/gpg.key
-        uri: https://apt.fury.io/wez/
-        # Fury serves one flat tree: there is no suite or component to name.
-        suites: "*"
-        components: "*"
-      claude-desktop:
-        # Anthropic publishes one suite for every distribution, so the usual
-        # {codename} template does not apply here.
-        key: https://downloads.claude.ai/claude-desktop/key.asc
-        fingerprint: 31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
-        uri: https://downloads.claude.ai/claude-desktop/apt/stable
-        suites: stable
-        files:
-          # The package's postinst registers this repository a second time as a
-          # one-line .list, and apt then warns about the duplicate on every
-          # update. It reads this file and skips its own registration.
-          /etc/default/claude-desktop: |
-            CLAUDE_DESKTOP_ADD_REPO="false"
-    packages:
-      - claude-desktop
-      - wezterm-nightly
 
   # Snaps. Only where the deb world has nothing current to offer.
   snap:
