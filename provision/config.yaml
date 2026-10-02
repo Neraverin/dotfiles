@@ -122,12 +122,7 @@ common:
       # Debian 12 ships Go 1.19, far behind what the modules here need, and the
       # toolchain is one self-contained tree — upstream's tarball is simplest.
       url: https://go.dev/dl/{version}.linux-amd64.tar.gz
-      # Pinned, not `version_url: https://go.dev/VERSION?m=text`: endpoint
-      # security on the workstation denies reads of the go1.27.0 tarball by
-      # content hash — the download succeeds, every later open fails with EPERM.
-      # The file is genuine (sha256 matches go.dev), so this is a false
-      # positive on a fresh release. Drop the pin once it is cleared.
-      version: go1.26.7
+      version_url: https://go.dev/VERSION?m=text
       strip: 1
       bin: [go, gofmt]
 
