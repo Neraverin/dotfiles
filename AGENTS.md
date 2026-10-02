@@ -90,6 +90,7 @@ any change reaches all of them:
   output instead; it reaches `pipewire-pulse` directly.
 - Endpoint security can deny reads of a downloaded file by content hash: the download succeeds
   and every later `open` fails with `EPERM`. Verify the checksum before believing the file is
-  bad, then pin a different version. Go 1.27.0 is pinned around for this reason.
+  bad, then pin a different version. Go was pinned around 1.27.0 for this reason until 1.27.1
+  came out, which reads fine.
 - The anonymous GitHub API allows 60 calls an hour per address. Set `GITHUB_TOKEN` where several
   hosts share an egress address.
