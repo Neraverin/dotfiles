@@ -502,12 +502,12 @@ def sync_snap(desired: list, bucket: dict, *, dry_run: bool, verbose: bool) -> N
     log("snap")
 
     for index, name in enumerate(desired, start=1):
+        # A snap that was here before this tool stays the user's: it is not
+        # adopted, so dropping the entry never removes it.
         version = snap_version(name)
         if version:
             detail(f"{name}: already at {version}")
             note_skip()
-            if name not in owned:
-                owned.append(name)
             continue
 
         if dry_run:
@@ -587,10 +587,13 @@ def sync_deb(
             raise SystemExit(str(error)) from error
 
         # Some upstreams add a build suffix (4.1.1-312) the release tag lacks.
+        # A package already at this version is only re-recorded if it is ours;
+        # one installed by hand is not adopted, the same rule as for snaps.
         if present and present.split("-")[0] == tag.lstrip("v"):
             detail(f"{name}: already at {present}")
             note_skip()
-            owned[name] = {"version": tag, "package": package}
+            if name in owned:
+                owned[name] = {"version": tag, "package": package}
             continue
 
         asset = spec["asset"].format(
