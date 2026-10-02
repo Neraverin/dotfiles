@@ -48,7 +48,8 @@ asset template shows up without downloading anything. `--only <section>` narrows
   running release before it is written: an upstream that has not caught up with a fresh release
   must warn, never leave a stanza behind that breaks every later `apt-get update` on the host.
 - `provision.py` only ever removes what its own state file says it installed. Keep that property:
-  a new source section needs both an install path and a removal path keyed off state.
+  a new source section needs both an install path and a removal path keyed off state, and a
+  line in `set_aside()` so a run without gui leaves that section's gui entries alone.
 - Two ways to place a dotfile, and the choice matters:
   - `files` — rewritten on every run. Only for files the application never touches (wezterm,
     starship).

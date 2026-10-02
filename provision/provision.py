@@ -1443,6 +1443,56 @@ def merge_apt(common: dict, gui: dict) -> dict:
     }
 
 
+def set_aside(state: dict, common: dict, gui: dict) -> list:
+    """Lift the records of gui-only entries out of state for a run without gui.
+
+    Every section reads a record missing from what it was asked for as an entry
+    dropped from config.yaml, and removes what that entry installed. Without gui
+    that would strip the desktop software off a desktop — on --no-gui, or on
+    the day detection misses one. With the records out of sight the sections
+    neither install nor remove any of it; put_back() restores them afterwards,
+    so only deleting an entry from config.yaml ever uninstalls it.
+    """
+
+    def gui_only(section: str, key: str | None = None) -> set:
+        """Names gui declares that common does not; those stay wanted anyway."""
+        mine, theirs = gui.get(section) or {}, common.get(section) or {}
+        if key:
+            mine, theirs = mine.get(key) or {}, theirs.get(key) or {}
+        return set(mine) - set(theirs)
+
+    files = {str(expand(path)) for path in gui_only("files")}
+    plan = [
+        (state, key, gui_only(key))
+        for key in ("github", "archive", "npm", "go", "fonts")
+    ] + [
+        (state, "files", files),
+        (state["apt"], "packages", gui_only("apt", "packages")),
+        (state["apt"], "repos", gui_only("apt", "repos")),
+        (state["apt"], "repo_files", gui_only("apt", "repos")),
+        (state["apt"], "links", gui_only("apt", "links")),
+    ]
+
+    held = []
+    for bucket, key, names in plan:
+        records = bucket[key]
+        if isinstance(records, dict):
+            taken = {name: records.pop(name) for name in list(records) if name in names}
+        else:
+            taken = [name for name in records if name in names]
+            bucket[key] = [name for name in records if name not in names]
+        held.append((bucket, key, taken))
+    return held
+
+
+def put_back(held: list) -> None:
+    for bucket, key, taken in held:
+        if isinstance(taken, dict):
+            bucket[key].update(taken)
+        else:
+            bucket[key] = sorted(set(bucket[key]) | set(taken))
+
+
 def check_platform() -> None:
     if sys.platform != "linux":
         raise SystemExit("provision.py targets Linux only")
@@ -1595,11 +1645,15 @@ def main() -> None:
         return sections is None or section in sections
 
     log(f"Config:  {args.config}")
-    log(f"GUI:     {'yes' if want_gui else 'no'} — {origin}")
+    if want_gui:
+        log(f"GUI:     yes — {origin}")
+    else:
+        log(f"GUI:     no — {origin}; desktop entries are skipped, never removed")
     log(f"Mode:    {'dry run' if args.dry_run else 'apply'}")
     log("")
 
     state = load_state()
+    held = [] if want_gui else set_aside(state, common, gui_section)
 
     # A section that aborts — an unreachable upstream, a failed apt — must not
     # throw away the record of what the earlier sections already installed, or
@@ -1660,6 +1714,7 @@ def main() -> None:
         if wanted("shell"):
             sync_shell(merge(common, gui, "shell", {}), dry_run=args.dry_run)
     finally:
+        put_back(held)
         state["gui"] = want_gui
         save_state(state, dry_run=args.dry_run)
 
