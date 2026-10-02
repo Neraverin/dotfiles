@@ -15,17 +15,22 @@ declared in `provision/config.yaml`.
 `apply.sh` is a one-line wrapper around `provision/provision.py`, which takes the same flags
 and can be called directly; either works from any directory.
 
-Desktop-only entries are applied when a graphical session is detected; force the decision
-with `--gui` / `--no-gui`. Without a desktop the section is only skipped: nothing it installed is
-ever removed by `--no-gui` or by a missed detection, only by deleting the entry from
-`config.yaml`. `--only <section>` limits the run to one of `apt`, `github`, `archive`, `npm`,
-`go`, `fonts`, `files`, `shell`. `--verbose` streams command output.
+When the host has a desktop, the `gui` section is applied as well: DeaDBeeF, the Hack Nerd Font,
+wezterm-nightly, claude-desktop, telegram-desktop, happ and tailscale. A desktop is detected from
+`XDG_CURRENT_DESKTOP` or from installed desktop software (GNOME Shell, Xorg, a display manager);
+WSL always counts as headless. `--gui` / `--no-gui` override the detection. Without a desktop the
+section is only skipped: nothing it installed is ever removed by `--no-gui` or by a missed
+detection, only by deleting the entry from `config.yaml`.
+
+`--only <section>` limits the run to one of `apt`, `github`, `archive`, `npm`, `go`, `fonts`,
+`files`, `shell`, `snap`, `deb`, `script`. `--verbose` streams command output.
 
 What it installed is recorded in `~/.local/state/dotfiles/state.json`. Removing an entry from
 `config.yaml` removes what that entry installed on the next run — and nothing else, so packages
 that predate the tool are never touched.
 
-Requires a Debian or Ubuntu host, `python3-yaml`, and `sudo` for the `apt` section only.
+Requires a Debian or Ubuntu host, `python3-yaml`, and `sudo` for apt and, on a desktop, for the
+snaps, `.deb`s and vendor installers.
 
 The `apt` section also owns third-party repositories — Docker's, currently: the keyring lands in
 `/etc/apt/keyrings/<name>.asc` and the deb822 stanza in `/etc/apt/sources.list.d/<name>.sources`,
@@ -45,11 +50,7 @@ sudo apt-get install -y python3-yaml
 ./apply.sh
 ```
 
-`workstation.sh` applies the `workstation` section of `config.yaml` — the
-system-wide desktop software an ordinary run stays away from: wezterm-nightly,
-telegram-desktop, happ, claude-desktop and tailscale. It takes the same flags as
-`apply.sh` (`--dry-run`, `--verbose`, `--only`, `--upgrade`). `./tailscale-up.sh`
-then joins the tailnet.
+On a desktop, `./tailscale-up.sh` then joins the tailnet.
 
 ## Migrating a host off Nix
 

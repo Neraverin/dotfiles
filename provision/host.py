@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """How this repository talks to the host it is provisioning.
 
-provision.py and workstation.py drive the same host in the same way — the same
-sudo handling, the same numbered step lines, the same staging rules — and
-neither is the natural owner of that code. It lives here so that importing one tool does not drag in
-the other, and so the counters a run reports are kept in one place rather than
-passed around.
+Sudo handling, numbered step lines, fetching and staging, the run counters and
+the state file: the plumbing provision.py needs, kept apart from the code that
+decides what to install, and with the counters in one place rather than passed
+around.
 
 Nothing here knows about config.yaml or about any particular kind of package.
 """
@@ -323,18 +322,10 @@ def link_bin(source: Path, name: str) -> Path:
 
 EMPTY_STATE = {
     "apt": {"packages": [], "links": {}, "repos": [], "repo_files": {}},
-    # System-wide desktop software, reconciled only by a --workstation run.
-    # A separate bucket so an ordinary run, which never declares any of it,
-    # does not read the emptiness as "remove all of this".
-    "workstation": {
-        "repos": [],
-        "repo_files": {},
-        "packages": [],
-        "links": {},
-        "snap": [],
-        "deb": {},
-        "script": {},
-    },
+    # Desktop-only sources; empty on every headless host.
+    "snap": [],
+    "deb": {},
+    "script": {},
     "github": {},
     "archive": {},
     "npm": {},
@@ -356,6 +347,18 @@ def load_state() -> dict:
 
     for key, default in EMPTY_STATE["apt"].items():
         state["apt"].setdefault(key, json.loads(json.dumps(default)))
+
+    # Desktop software used to be applied by a separate --workstation run with
+    # a state bucket of its own. It is part of `gui` now; fold whatever that
+    # bucket owned into the ordinary records, so it stays ours to manage.
+    legacy = state.pop("workstation", None) or {}
+    for key in ("packages", "repos"):
+        state["apt"][key] = sorted(set(state["apt"][key]) | set(legacy.get(key, [])))
+    for key in ("links", "repo_files"):
+        state["apt"][key].update(legacy.get(key, {}))
+    state["snap"] = sorted(set(state["snap"]) | set(legacy.get("snap", [])))
+    state["deb"].update(legacy.get("deb", {}))
+    state["script"].update(legacy.get("script", {}))
 
     return state
 

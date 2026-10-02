@@ -357,7 +357,7 @@ def apt_version(package: str) -> str:
 
 
 def sync_apt(
-    desired: dict, bucket: dict, *, dry_run: bool, verbose: bool, heading: str = "apt"
+    desired: dict, bucket: dict, *, dry_run: bool, verbose: bool
 ) -> None:
     packages = desired.get("packages") or []
     links = desired.get("links") or {}
@@ -366,7 +366,7 @@ def sync_apt(
     if not packages and not bucket["packages"] and not repos:
         return
 
-    log(heading)
+    log("apt")
 
     # Repositories first: a package below may only exist in one of them.
     repos_changed = sync_apt_repos(repos, bucket, dry_run=dry_run, verbose=verbose)
@@ -480,8 +480,8 @@ def sync_apt_links(links: dict, bucket: dict, *, dry_run: bool) -> None:
 #
 # Three ways desktop software arrives that apt cannot describe on its own. They
 # are declared like every other source, but unlike the rest of this tool they
-# install system-wide, so they are reached only through the `workstation`
-# section — never from a plain run.
+# install system-wide, so they belong under `gui` alone, which never reaches a
+# headless host.
 
 
 def snap_version(name: str) -> str:
@@ -500,6 +500,12 @@ def sync_snap(desired: list, bucket: dict, *, dry_run: bool, verbose: bool) -> N
         return
 
     log("snap")
+
+    # Ubuntu ships snapd on every desktop; Debian does not. A desktop without it
+    # just goes without these, the way a host without npm skips that section.
+    if not shutil.which("snap"):
+        warn("snap is not on PATH; skipping the snap section")
+        return
 
     for index, name in enumerate(desired, start=1):
         # A snap that was here before this tool stays the user's: it is not
@@ -537,7 +543,6 @@ def sync_snap(desired: list, bucket: dict, *, dry_run: bool, verbose: bool) -> N
         owned.remove(name)
 
     bucket["snap"] = sorted(set(owned) & set(desired)) if not dry_run else owned
-    log("")
 
 
 def deb_version(package: str) -> str:
@@ -637,7 +642,6 @@ def sync_deb(
         owned.pop(name)
 
     bucket["deb"] = owned
-    log("")
 
 
 def sync_script(desired: dict, bucket: dict, *, dry_run: bool, verbose: bool) -> None:
@@ -690,7 +694,6 @@ def sync_script(desired: dict, bucket: dict, *, dry_run: bool, verbose: bool) ->
         owned.pop(name)
 
     bucket["script"] = owned
-    log("")
 
 
 # ------------------------------------------------------------------------ github
@@ -1464,7 +1467,7 @@ def set_aside(state: dict, common: dict, gui: dict) -> list:
     files = {str(expand(path)) for path in gui_only("files")}
     plan = [
         (state, key, gui_only(key))
-        for key in ("github", "archive", "npm", "go", "fonts")
+        for key in ("github", "archive", "npm", "go", "fonts", "snap", "deb", "script")
     ] + [
         (state, "files", files),
         (state["apt"], "packages", gui_only("apt", "packages")),
@@ -1506,71 +1509,6 @@ def check_platform() -> None:
         )
 
 
-def run_workstation(
-    spec: dict,
-    config_path: str,
-    *,
-    sections: set | None,
-    dry_run: bool,
-    verbose: bool,
-    upgrade: bool,
-) -> None:
-    """Reconcile the system-wide desktop software, and nothing else.
-
-    Kept apart from the ordinary run on purpose. These entries install outside
-    $HOME and exist on one host, so an ordinary `./apply.sh` — which never
-    declares them — must not read their absence as an instruction to remove
-    them. They get their own state bucket for the same reason.
-    """
-    log(f"Config:  {config_path}")
-    log(f"Mode:    {'dry run' if dry_run else 'apply'}")
-    log("Scope:   workstation")
-    log("")
-
-    state = load_state()
-    bucket = state["workstation"]
-
-    def wanted(section: str) -> bool:
-        return sections is None or section in sections
-
-    try:
-        if wanted("apt"):
-            sync_apt(
-                spec.get("apt") or {},
-                bucket,
-                dry_run=dry_run,
-                verbose=verbose,
-                heading="apt",
-            )
-        if wanted("snap"):
-            sync_snap(spec.get("snap") or [], bucket, dry_run=dry_run, verbose=verbose)
-        if wanted("deb"):
-            sync_deb(
-                spec.get("deb") or {},
-                bucket,
-                dry_run=dry_run,
-                verbose=verbose,
-                upgrade=upgrade,
-            )
-        if wanted("script"):
-            sync_script(
-                spec.get("script") or {}, bucket, dry_run=dry_run, verbose=verbose
-            )
-    finally:
-        save_state(state, dry_run=dry_run)
-
-    changed, current, gone, problems = counts()
-    if dry_run:
-        changed_verb, removed_verb = "would change", "would be removed"
-    else:
-        changed_verb, removed_verb = "changed", "removed"
-    log("")
-    log(
-        f"Done. {changed} {changed_verb}, {current} already current, "
-        f"{gone} {removed_verb}, {problems} warning(s)."
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default=str(Path(__file__).parent / "config.yaml"))
@@ -1601,17 +1539,12 @@ def main() -> None:
             "fonts",
             "files",
             "shell",
-            # --workstation only
+            # gui only
             "snap",
             "deb",
             "script",
         ],
         help="run just these sections (repeatable)",
-    )
-    parser.add_argument(
-        "--workstation",
-        action="store_true",
-        help="reconcile the workstation section instead of the usual ones",
     )
     args = parser.parse_args()
 
@@ -1620,17 +1553,6 @@ def main() -> None:
     config = yaml.safe_load(Path(args.config).read_text()) or {}
     common = config.get("common") or {}
     gui_section = config.get("gui") or {}
-
-    if args.workstation:
-        run_workstation(
-            config.get("workstation") or {},
-            args.config,
-            sections=set(args.only) if args.only else None,
-            dry_run=args.dry_run,
-            verbose=args.verbose,
-            upgrade=args.upgrade,
-        )
-        return
 
     if args.gui is None:
         want_gui, reason = detect_gui()
@@ -1713,6 +1635,31 @@ def main() -> None:
             )
         if wanted("shell"):
             sync_shell(merge(common, gui, "shell", {}), dry_run=args.dry_run)
+        # The system-wide desktop sources come last: everything under $HOME is
+        # in place even if a snap store or a vendor's server is down, and a
+        # vendor installer finds the curl and CA bundle apt has just ensured.
+        if wanted("snap"):
+            sync_snap(
+                merge(common, gui, "snap", []),
+                state,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
+        if wanted("deb"):
+            sync_deb(
+                merge(common, gui, "deb", {}),
+                state,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+                upgrade=args.upgrade,
+            )
+        if wanted("script"):
+            sync_script(
+                merge(common, gui, "script", {}),
+                state,
+                dry_run=args.dry_run,
+                verbose=args.verbose,
+            )
     finally:
         put_back(held)
         state["gui"] = want_gui
