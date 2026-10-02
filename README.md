@@ -16,8 +16,10 @@ declared in `provision/config.yaml`.
 and can be called directly; either works from any directory.
 
 Desktop-only entries are applied when a graphical session is detected; force the decision
-with `--gui` / `--no-gui`. `--only <section>` limits the run to one of `apt`, `github`,
-`archive`, `npm`, `go`, `fonts`, `files`, `shell`. `--verbose` streams command output.
+with `--gui` / `--no-gui`. Without a desktop the section is only skipped: nothing it installed is
+ever removed by `--no-gui` or by a missed detection, only by deleting the entry from
+`config.yaml`. `--only <section>` limits the run to one of `apt`, `github`, `archive`, `npm`,
+`go`, `fonts`, `files`, `shell`. `--verbose` streams command output.
 
 What it installed is recorded in `~/.local/state/dotfiles/state.json`. Removing an entry from
 `config.yaml` removes what that entry installed on the next run — and nothing else, so packages
