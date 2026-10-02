@@ -179,9 +179,10 @@ gui:
   archive:
     deadbeef:
       # Not in the Ubuntu 26.04 archive and with no GitHub release; upstream's
-      # static build is the only packaging that still installs cleanly.
-      url: https://sourceforge.net/projects/deadbeef/files/travis/linux/{version}/deadbeef-static_{version}-1_x86_64.tar.bz2/download
-      version: 1.10.0
+      # static build is the only packaging that still installs cleanly. Builds
+      # after 1.10.0 live under Builds/<version>/linux, not travis/linux.
+      url: https://sourceforge.net/projects/deadbeef/files/Builds/{version}/linux/deadbeef-static_{version}-1_x86_64.tar.bz2/download
+      version: 1.10.3
       archive_name: deadbeef-static_{version}-1_x86_64.tar.bz2
       strip: 1
       bin: [deadbeef]
