@@ -757,6 +757,7 @@ def install_github(
         return f"already at {tag}"
 
     if dry_run:
+        note_installed(name)
         return f"would fetch {tag} from {url}"
 
     with staging_area(BIN_DIR) as tmp:
@@ -815,9 +816,9 @@ def sync_github(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> 
                 detail(f"would remove {path}")
             else:
                 Path(path).unlink(missing_ok=True)
-        detail(f"{name}: removed")
         note_removed(name)
         if not dry_run:
+            detail(f"{name}: removed")
             del state["github"][name]
 
 
@@ -940,6 +941,7 @@ def install_archive(
     )
 
     if dry_run:
+        note_installed(name)
         return f"would fetch {version} from {url}"
 
     with staging_area(OPT_DIR) as tmp:
@@ -991,6 +993,7 @@ def sync_archive(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) ->
         entry = state["archive"][name]
         if dry_run:
             detail(f"would remove {entry['dir']}")
+            note_removed(name)
             continue
         for path in entry.get("links", []) + entry.get("desktop", []):
             Path(path).unlink(missing_ok=True)
@@ -1052,6 +1055,7 @@ def sync_npm(
 
         if dry_run:
             step_end(label, "would install")
+            note_installed(package)
             continue
 
         try:
@@ -1080,7 +1084,8 @@ def sync_npm(
             verbose=verbose,
             check=False,
         )
-        detail(f"{package}: removed")
+        if not dry_run:
+            detail(f"{package}: removed")
         note_removed(package)
         if not dry_run:
             del state["npm"][package]
@@ -1114,6 +1119,7 @@ def sync_go(
 
         if dry_run:
             step_end(label, f"would go install {package}")
+            note_installed(name)
             continue
 
         env = child_env()
@@ -1140,6 +1146,7 @@ def sync_go(
     for name in [n for n in list(state["go"]) if n not in desired]:
         if dry_run:
             detail(f"would remove {BIN_DIR / name}")
+            note_removed(name)
             continue
         (BIN_DIR / name).unlink(missing_ok=True)
         detail(f"{name}: removed")
@@ -1188,6 +1195,7 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
 
         if dry_run:
             step_end(label, f"would fetch {tag} from {url}")
+            note_installed(name)
             continue
 
         with staging_area(FONT_DIR) as tmp:
@@ -1213,6 +1221,7 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
     for name in [n for n in list(state["fonts"]) if n not in desired]:
         if dry_run:
             detail(f"would remove {state['fonts'][name]['dir']}")
+            note_removed(name)
             continue
         shutil.rmtree(state["fonts"][name]["dir"], ignore_errors=True)
         detail(f"{name}: removed")
@@ -1316,7 +1325,7 @@ def sync_files(
             detail(f"would remove {path}")
         else:
             Path(path).unlink(missing_ok=True)
-        detail(f"{path}: removed")
+            detail(f"{path}: removed")
         note_removed(path)
 
     state["files"] = sorted(managed)
@@ -1492,11 +1501,14 @@ def run_workstation(
         save_state(state, dry_run=dry_run)
 
     changed, current, gone, problems = counts()
-    verb = "would change" if dry_run else "changed"
+    if dry_run:
+        changed_verb, removed_verb = "would change", "would be removed"
+    else:
+        changed_verb, removed_verb = "changed", "removed"
     log("")
     log(
-        f"Done. {changed} {verb}, {current} already current, "
-        f"{gone} removed, {problems} warning(s)."
+        f"Done. {changed} {changed_verb}, {current} already current, "
+        f"{gone} {removed_verb}, {problems} warning(s)."
     )
 
 
@@ -1643,11 +1655,14 @@ def main() -> None:
         save_state(state, dry_run=args.dry_run)
 
     log("")
-    verb = "would change" if args.dry_run else "changed"
+    if args.dry_run:
+        changed_verb, removed_verb = "would change", "would be removed"
+    else:
+        changed_verb, removed_verb = "changed", "removed"
     changed, current, gone, problems = counts()
     log(
-        f"Done. {changed} {verb}, {current} already current, "
-        f"{gone} removed, {problems} warning(s)."
+        f"Done. {changed} {changed_verb}, {current} already current, "
+        f"{gone} {removed_verb}, {problems} warning(s)."
     )
 
 
