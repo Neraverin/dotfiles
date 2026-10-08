@@ -89,6 +89,11 @@ common:
       repo: ogulcancelik/herdr
       asset: herdr-linux-x86_64
       binary: herdr
+    k9s:
+      # Not packaged by Debian or Ubuntu at all.
+      repo: derailed/k9s
+      asset: k9s_Linux_amd64.tar.gz
+      binaries: [k9s]
     procs:
       repo: dalance/procs
       asset: procs-{version}-x86_64-linux.zip
