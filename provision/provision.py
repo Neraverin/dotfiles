@@ -14,6 +14,7 @@ that predates the tool is left where it is.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
@@ -773,26 +774,41 @@ def install_github(
 
         placed = []
 
-        if spec.get("binary"):
-            # The asset is the executable itself, not an archive around one.
-            destination = BIN_DIR / spec["binary"]
-            BIN_DIR.mkdir(parents=True, exist_ok=True)
-            if destination.is_symlink():
-                destination.unlink()
-            shutil.copyfile(payload, destination)
-            destination.chmod(0o755)
-            placed.append(str(destination))
-        else:
-            unpacked = tmp_path / "unpacked"
-            extract_archive(payload, unpacked)
-            BIN_DIR.mkdir(parents=True, exist_ok=True)
-            for binary in spec["binaries"]:
-                destination = BIN_DIR / binary
+        try:
+            if spec.get("binary"):
+                # The asset is the executable itself, not an archive around one.
+                destination = BIN_DIR / spec["binary"]
+                BIN_DIR.mkdir(parents=True, exist_ok=True)
                 if destination.is_symlink():
                     destination.unlink()
-                shutil.copyfile(find_binary(unpacked, binary), destination)
+                shutil.copyfile(payload, destination)
                 destination.chmod(0o755)
                 placed.append(str(destination))
+            else:
+                unpacked = tmp_path / "unpacked"
+                extract_archive(payload, unpacked)
+                BIN_DIR.mkdir(parents=True, exist_ok=True)
+                for binary in spec["binaries"]:
+                    destination = BIN_DIR / binary
+                    if destination.is_symlink():
+                        destination.unlink()
+                    shutil.copyfile(find_binary(unpacked, binary), destination)
+                    destination.chmod(0o755)
+                    placed.append(str(destination))
+        except OSError as error:
+            # The kernel refuses to write over an executable that is running.
+            # herdr hits this whenever the run is started from inside herdr: its
+            # server keeps going, so the old build stays and the new release is
+            # picked up by the first run after it exits.
+            if error.errno != errno.ETXTBSY:
+                raise
+            if not known:
+                raise SystemExit(f"{name}: {error.filename} is running") from error
+            note_warning(
+                f"{name}: {error.filename} is running; kept {known['version']}, "
+                f"{tag} not installed"
+            )
+            return f"kept {known['version']} ({tag} skipped, binary is running)"
 
     state["github"][name] = {"version": tag, "files": placed}
     note_installed(name)
