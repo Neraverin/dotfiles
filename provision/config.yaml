@@ -94,6 +94,13 @@ common:
       repo: derailed/k9s
       asset: k9s_Linux_amd64.tar.gz
       binaries: [k9s]
+    kubelogin:
+      # Not packaged by Debian or Ubuntu. The OIDC helper a kubeconfig's
+      # `exec:` block calls for an SSO token; run as `kubelogin get-token`,
+      # so no kubectl-oidc_login name is needed on PATH.
+      repo: int128/kubelogin
+      asset: kubelogin_linux_amd64.zip
+      binaries: [kubelogin]
     procs:
       repo: dalance/procs
       asset: procs-{version}-x86_64-linux.zip
@@ -129,6 +136,15 @@ common:
       version_url: https://go.dev/VERSION?m=text
       strip: 1
       bin: [go, gofmt]
+    kubectl:
+      # Debian 12 ships 1.20, far outside kubectl's one-minor skew window, and
+      # Kubernetes publishes no GitHub release binaries. The minor is pinned
+      # rather than following stable.txt: k8s-ptx-prod runs 1.34, and 1.35 is
+      # the newest client still supported against it. Raise it with the cluster.
+      url: https://dl.k8s.io/{version}/kubernetes-client-linux-amd64.tar.gz
+      version_url: https://dl.k8s.io/release/stable-1.35.txt
+      strip: 2
+      bin: [kubectl]
 
   # Global npm packages, installed under ~/.local so no root is involved.
   npm:
