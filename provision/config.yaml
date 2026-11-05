@@ -248,6 +248,28 @@ gui:
         comment: Audio player
         categories: AudioVideo;Audio;Player;
         mimetype: audio/mpeg;audio/flac;audio/ogg;audio/x-vorbis+ogg;audio/x-wav;
+    herdr-app:
+      # The desktop app for herdr-core. Packaged nowhere and not a GitHub
+      # release: upstream serves tarballs plus a JSON manifest from its own
+      # server, so the version comes from the manifest's `version` field.
+      # Upstream's installer uses ~/.local/share/herdr-app, but the app finds
+      # its folder from its own executable and updates itself in place through
+      # a sibling <dir>.new, so ~/.local/opt works as well. The state's version
+      # then lags, and --upgrade re-fetches a release the app already applied.
+      # The app runs no terminals itself: on first start it offers to install
+      # herdr-core (`hc`) into ~/.local/bin and keeps that current afterwards.
+      url: https://releases.herdr.dev/app/{version}/herdr-app-linux-x86_64.tar.gz
+      version_url: https://releases.herdr.dev/app/latest.json
+      version_key: version
+      strip: 1
+      bin: [herdr-app]
+      # The tarball carries the binary and its icon but no launcher.
+      desktop:
+        name: Herdr
+        exec: herdr-app
+        icon: herdr-app.svg
+        comment: Terminals and coding agents that keep running
+        categories: Development;
 
   fonts:
     hack-nerd-font:
