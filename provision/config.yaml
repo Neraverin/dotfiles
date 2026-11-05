@@ -151,6 +151,13 @@ common:
     - "@anthropic-ai/claude-code"
     - "@fission-ai/openspec"
     - "@openai/codex"
+    # Grok Build, xAI's coding agent; no distribution packages it. xAI's own
+    # npm package rather than its install.sh, which edits ~/.bashrc and leaves
+    # nothing to uninstall from. The postinstall also unpacks the native binary
+    # into ~/.grok/bin, so this costs about 430 MB of $HOME. On a host where
+    # install.sh ran before, npm refuses to replace the ~/.local/bin/grok link
+    # it left: delete that link first.
+    - "@xai-official/grok"
 
   # Built from source with the Go toolchain above, into ~/.local/bin.
   go:
@@ -173,6 +180,9 @@ common:
   shell:
     env:
       EDITOR: vim
+      # Grok's updater runs `npm i -g` without --prefix, aims at /usr/local and
+      # fails on every new release. It comes from --upgrade like the rest.
+      GROK_DISABLE_AUTOUPDATER: "1"
     path:
       - $HOME/.local/bin
     aliases:
