@@ -852,11 +852,21 @@ def resolve_archive_version(spec: dict) -> str:
         return str(spec["version"])
     if spec.get("version_url"):
         try:
-            return fetch_text(spec["version_url"]).strip().splitlines()[0]
+            text = fetch_text(spec["version_url"])
         except urllib.error.URLError as error:
             raise UpstreamUnavailable(
                 f"{spec['version_url']} is unreachable: {error.reason}"
             ) from error
+        # Some upstreams publish the version only inside a JSON release
+        # manifest rather than as a bare line; `version_key` names its field.
+        if key := spec.get("version_key"):
+            try:
+                return str(json.loads(text)[key])
+            except (ValueError, KeyError, TypeError) as error:
+                raise SystemExit(
+                    f"{spec['version_url']} carries no {key!r} field"
+                ) from error
+        return text.strip().splitlines()[0]
     raise SystemExit("an archive entry needs either version or version_url")
 
 
