@@ -18,6 +18,7 @@ import errno
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import host
 from host import (
     BIN_DIR,
     DESKTOP_DIR,
@@ -52,11 +54,13 @@ from host import (
     log,
     note_installed,
     note_removed,
+    note_broken,
     note_skip,
     note_warning,
     read_root_file,
     run,
     save_state,
+    smoke_test,
     staging_area,
     step_end,
     step_start,
@@ -697,6 +701,47 @@ def sync_script(desired: dict, bucket: dict, *, dry_run: bool, verbose: bool) ->
     bucket["script"] = owned
 
 
+# ------------------------------------------------------------------------ checks
+
+# What a freshly installed binary is run with to prove it works. Almost every
+# CLI answers --version; an entry's `check:` overrides it for the rest.
+DEFAULT_CHECK = ["--version"]
+
+
+def check_args(check, binary: str) -> list[str] | None:
+    """The arguments `binary` is smoke-tested with, from an entry's `check:`.
+
+    `check` is absent (--version), a list or string of arguments for every
+    binary of the entry, false (only test that the file is executable, for GUI
+    programs that open a window whatever they are given), or a map from binary
+    name to any of those.
+    """
+    if isinstance(check, dict):
+        check = check.get(binary)
+    if check is None:
+        return DEFAULT_CHECK
+    if check is False:
+        return None
+    if isinstance(check, str):
+        return shlex.split(check)
+    return [str(arg) for arg in check]
+
+
+def verify(name: str, binaries: list[Path], check) -> bool:
+    """Smoke-test what an entry just installed; report and count any failure.
+
+    A broken tool is not rolled back: the previous release is already gone by
+    the time the new one can be run. The error says which item to look at, and
+    the run ends non-zero so a scripted --upgrade does not pass silently.
+    """
+    for binary in binaries:
+        problem = smoke_test(binary, check_args(check, binary.name))
+        if problem:
+            note_broken(name, problem)
+            return False
+    return True
+
+
 # ------------------------------------------------------------------------ github
 
 
@@ -823,6 +868,7 @@ def sync_github(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> 
 
     for index, (name, spec) in enumerate(desired.items(), start=1):
         label = step_start(index, len(desired), name)
+        before = state["github"].get(name)
         try:
             status = install_github(
                 name, spec, state, dry_run=dry_run, upgrade=upgrade
@@ -831,6 +877,10 @@ def sync_github(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> 
             step_end(label, "failed")
             raise
         step_end(label, status)
+        # install_github records a fresh entry only when it placed new files.
+        after = state["github"].get(name)
+        if after is not before:
+            verify(name, [Path(p) for p in after["files"]], spec.get("check"))
 
     for name in [n for n in list(state["github"]) if n not in desired]:
         for path in state["github"][name]["files"]:
@@ -1012,6 +1062,7 @@ def sync_archive(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) ->
 
     for index, (name, spec) in enumerate(desired.items(), start=1):
         label = step_start(index, len(desired), name)
+        before = state["archive"].get(name)
         try:
             status = install_archive(
                 name, spec, state, dry_run=dry_run, upgrade=upgrade
@@ -1020,6 +1071,10 @@ def sync_archive(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) ->
             step_end(label, "failed")
             raise
         step_end(label, status)
+        # install_archive records a fresh entry only when it unpacked a release.
+        after = state["archive"].get(name)
+        if after is not before:
+            verify(name, [Path(p) for p in after["links"]], spec.get("check"))
 
     for name in [n for n in list(state["archive"]) if n not in desired]:
         entry = state["archive"][name]
@@ -1046,6 +1101,19 @@ def npm_installed_version(package: str) -> str | None:
         return json.loads(manifest.read_text()).get("version")
     except json.JSONDecodeError:
         return None
+
+
+def npm_bin_links(package: str) -> list[Path]:
+    """The ~/.local/bin links npm made for a package, from its `bin` field."""
+    manifest = NPM_PREFIX / "lib/node_modules" / package / "package.json"
+    try:
+        bins = json.loads(manifest.read_text()).get("bin") or {}
+    except (OSError, json.JSONDecodeError):
+        return []
+    if isinstance(bins, str):
+        # A bare string is linked under the package name, minus any scope.
+        bins = {package.rsplit("/", 1)[-1]: bins}
+    return [BIN_DIR / name for name in bins]
 
 
 def npm_latest_version(package: str) -> str | None:
@@ -1114,6 +1182,13 @@ def sync_npm(
         step_end(label, f"done ({version})")
         note_installed(package)
         state["npm"][package] = version
+        # npm reports success even when a postinstall that fetches the real
+        # native binary failed, leaving a link to nothing; only running it tells.
+        if not verify(package, npm_bin_links(package), None) and current:
+            detail(
+                f"    back to the previous release: npm install -g --prefix "
+                f"{NPM_PREFIX} {package}@{current}"
+            )
 
     for package in [p for p in list(state["npm"]) if p not in desired]:
         run(
@@ -1145,7 +1220,10 @@ def sync_go(
         warn("go is not on PATH; skipping the go section")
         return
 
-    for index, (name, package) in enumerate(desired.items(), start=1):
+    for index, (name, spec) in enumerate(desired.items(), start=1):
+        # A bare string is the package; a mapping adds a `check:` beside it.
+        package = spec["package"] if isinstance(spec, dict) else spec
+        check = spec.get("check") if isinstance(spec, dict) else None
         binary = BIN_DIR / name
         label = step_start(index, len(desired), name)
 
@@ -1180,6 +1258,7 @@ def sync_go(
         step_end(label, "done")
         note_installed(name)
         state["go"][name] = package
+        verify(name, [binary], check)
 
     for name in [n for n in list(state["go"]) if n not in desired]:
         if dry_run:
@@ -1701,6 +1780,11 @@ def main() -> None:
         f"Done. {changed} {changed_verb}, {current} already current, "
         f"{gone} {removed_verb}, {problems} warning(s)."
     )
+    if host.broken:
+        # Repeated at the end: the error lines are long gone off the screen of
+        # a run that goes on through a dozen more sections.
+        log(f"Broken after install: {', '.join(host.broken)}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

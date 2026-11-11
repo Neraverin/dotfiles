@@ -20,6 +20,12 @@
 #   deb      a .deb from a GitHub release                   (gui only)
 #   script   a vendor installer, plus commands re-run after (gui only)
 #
+# Every executable github, archive, npm and go install is run once right after
+# it is installed or upgraded, with --version unless the entry says otherwise
+# in `check:` — a list of arguments, a map from binary name to such a list, or
+# false where any invocation would open a window. A tool that cannot start, or
+# exits non-zero, is reported as broken and the run exits 1.
+#
 # `common` is kept deliberately host-agnostic: nothing there may assume a
 # graphical session, a specific distribution, or a path outside $HOME.
 
@@ -94,6 +100,7 @@ common:
       repo: derailed/k9s
       asset: k9s_Linux_amd64.tar.gz
       binaries: [k9s]
+      check: [version]
     kubelogin:
       # Not packaged by Debian or Ubuntu. The OIDC helper a kubeconfig's
       # `exec:` block calls for an SSO token; run as `kubelogin get-token`,
@@ -136,6 +143,10 @@ common:
       version_url: https://go.dev/VERSION?m=text
       strip: 1
       bin: [go, gofmt]
+      # gofmt has no version flag and formats stdin when given nothing.
+      check:
+        go: [version]
+        gofmt: false
     kubectl:
       # Debian 12 ships 1.20, and Kubernetes publishes no GitHub release
       # binaries. Follows the latest stable release, which can run more than
@@ -145,6 +156,8 @@ common:
       version_url: https://dl.k8s.io/release/stable.txt
       strip: 2
       bin: [kubectl]
+      # Plain `version` also asks the cluster, which may be unreachable.
+      check: [version, --client]
 
   # Global npm packages, installed under ~/.local so no root is involved.
   npm:
@@ -159,9 +172,12 @@ common:
     # it left: delete that link first.
     - "@xai-official/grok"
 
-  # Built from source with the Go toolchain above, into ~/.local/bin.
+  # Built from source with the Go toolchain above, into ~/.local/bin. A value
+  # is the package, or a mapping with `package` and `check`.
   go:
-    gopls: golang.org/x/tools/gopls@latest
+    gopls:
+      package: golang.org/x/tools/gopls@latest
+      check: [version]
 
   # Files this repository owns: rewritten on every run.
   files:
@@ -249,6 +265,9 @@ gui:
       archive_name: deadbeef-static_{version}-1_x86_64.tar.bz2
       strip: 1
       bin: [deadbeef]
+      # Every invocation, --help included, starts the player or talks to a
+      # running one.
+      check: false
       # The static build ships the binary and its data, no packaging metadata,
       # so the launcher is generated rather than patched.
       desktop:
@@ -273,6 +292,8 @@ gui:
       version_key: version
       strip: 1
       bin: [herdr-app]
+      # Without arguments it opens the window.
+      check: [--help]
       # The tarball carries the binary and its icon but no launcher.
       desktop:
         name: Herdr
