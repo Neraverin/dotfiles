@@ -310,6 +310,18 @@ gui:
       arch:
         amd64: x64
         arm64: arm64
+    t3code:
+      # T3 Code's desktop app, packaged nowhere but its releases. It names t64
+      # and pre-t64 libraries as alternatives, so it installs on Debian 12 and
+      # Ubuntu 26.04 alike. It updates itself behind a password prompt; dpkg is
+      # then already at the latest tag and --upgrade only re-records it. It also
+      # carries the `t3` command and links it into ~/.local/bin on first launch,
+      # which stays the app's, not this tool's.
+      repo: pingdotgg/t3code
+      asset: T3-Code-{version_strip}-{arch}.deb
+      arch:
+        amd64: amd64
+        arm64: arm64
 
   # Upstreams whose only supported install is a script they host.
   script:
