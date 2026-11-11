@@ -52,6 +52,11 @@ the last three only ever have entries under `gui`.
     starship).
   - `seeds` — copied once, then left writable and alone. For files the application rewrites
     itself (Codex, Claude). `lines` is the same idea for one key inside a foreign config.
+- Every executable a github, archive, npm or go entry installs is run once after the install
+  (`smoke_test()` in `host.py`), with `--version` unless the entry's `check:` says otherwise.
+  When adding an entry, confirm the binary exits 0 with whatever `check:` resolves to; a GUI
+  program that opens a window on any invocation gets `check: false`. A failed check is printed
+  as `error: ... is broken after install` and makes the run exit 1.
 - Every item a section installs prints one `[N/M] name ... status` line. Long steps show
   `in progress` first so a silent minute is attributable to a package.
 - Comments explain *why*, and are most valuable where the tool meets the host distribution

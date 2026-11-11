@@ -41,6 +41,7 @@ USER_AGENT = "dotfiles provision (+https://github.com/neraverin/dotfiles)"
 installed: list[str] = []
 removed: list[str] = []
 warnings: list[str] = []
+broken: list[str] = []
 skipped = 0
 step_open = False
 
@@ -124,6 +125,65 @@ def break_step_line() -> None:
 def note_skip(count: int = 1) -> None:
     global skipped
     skipped += count
+
+
+# ------------------------------------------------------------------ smoke tests
+
+# A healthy --version answers in well under a second; Node-based CLIs take a few.
+# Anything slower is hung, waiting on a terminal or a network it should not need.
+SMOKE_TIMEOUT = 30
+
+
+def smoke_test(binary: Path, args: list[str] | None) -> str | None:
+    """Run a freshly installed binary once; return why it failed, or None.
+
+    A finished download is no proof the tool works: an npm package whose
+    postinstall failed leaves a link to a native binary that never arrived, a
+    release can be built against a newer glibc than the host has, and endpoint
+    security can deny exec of a file by its content hash. Running it is the
+    only check that catches all of them. `args` of None checks only that the
+    file exists and is executable, for GUI programs that open a window on any
+    invocation.
+    """
+    if not binary.exists():
+        # exists() follows symlinks, so a dangling link lands here too.
+        return f"{binary} is missing or a dangling link"
+    if not os.access(binary, os.X_OK):
+        return f"{binary} is not executable"
+    if args is None:
+        return None
+
+    command = [str(binary), *args]
+    try:
+        result = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            env=child_env(),
+            timeout=SMOKE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return f"`{' '.join(command)}` did not finish in {SMOKE_TIMEOUT}s"
+    except OSError as error:
+        return f"`{' '.join(command)}` could not start: {error.strerror}"
+
+    if result.returncode == 0:
+        return None
+    reason = f"`{' '.join(command)}` exited with {result.returncode}"
+    output = (result.stdout + result.stderr).strip().splitlines()
+    # The tail is where a crash or a missing library names itself.
+    return "\n".join([reason, *output[-10:]])
+
+
+def note_broken(name: str, problem: str) -> None:
+    """Record an item that installed but does not run, and say why."""
+    broken.append(name)
+    lines = problem.splitlines()
+    print(f"  error: {name} is broken after install: {lines[0]}", flush=True)
+    for line in lines[1:]:
+        detail(f"    {line}")
 
 
 def username() -> str:
