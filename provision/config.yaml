@@ -343,6 +343,19 @@ gui:
       arch:
         amd64: amd64
         arm64: arm64
+    orca:
+      # Orca's desktop app, packaged nowhere but its releases. It names only the
+      # pre-t64 gtk and atspi libraries, yet resolves on Ubuntu 26.04 because the
+      # t64 packages Provide the old names. It also pulls xvfb, xdotool and
+      # xclip from the distribution. Releases ship almost daily and the app
+      # updates its own .deb, so --upgrade usually finds dpkg already current.
+      repo: stablyai/orca
+      # Debian's `orca` is the GNOME screen reader.
+      package: orca-ide
+      asset: orca-ide_{version_strip}_{arch}.deb
+      arch:
+        amd64: amd64
+        arm64: arm64
 
   # Upstreams whose only supported install is a script they host.
   script:
