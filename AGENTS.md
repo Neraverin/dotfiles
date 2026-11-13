@@ -57,6 +57,11 @@ the last three only ever have entries under `gui`.
   When adding an entry, confirm the binary exits 0 with whatever `check:` resolves to; a GUI
   program that opens a window on any invocation gets `check: false`. A failed check is printed
   as `error: ... is broken after install` and makes the run exit 1.
+- One item's failure costs that item only. A section loop catches `ITEM_ERRORS` around each
+  item and hands it to `note_failed()`, records in state only what actually happened (a failed
+  install is not ours, a failed removal stays ours so the next run retries it), and moves on.
+  `main()` catches whatever a section raises outside its items. Failures are listed at the end
+  and the run exits 1.
 - Every item a section installs prints one `[N/M] name ... status` line. Long steps show
   `in progress` first so a silent minute is attributable to a package.
 - Comments explain *why*, and are most valuable where the tool meets the host distribution

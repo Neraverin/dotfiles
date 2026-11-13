@@ -32,6 +32,7 @@ from host import (
     DESKTOP_DIR,
     FONT_DIR,
     HOME,
+    ITEM_ERRORS,
     NPM_PREFIX,
     OPT_DIR,
     REPO_ROOT,
@@ -55,6 +56,7 @@ from host import (
     note_installed,
     note_removed,
     note_broken,
+    note_failed,
     note_skip,
     note_warning,
     read_root_file,
@@ -306,16 +308,15 @@ def sync_apt_repos(desired: dict, bucket: dict, *, dry_run: bool, verbose: bool)
                 if expected:
                     actual = key_fingerprint(key)
                     if actual != expected:
-                        step_end(label, "failed")
                         raise SystemExit(
-                            f"{name}: key fingerprint {actual or 'none'}, "
+                            f"key fingerprint {actual or 'none'}, "
                             f"expected {expected}"
                         )
                 install_as_root(key.read_bytes(), apt_key_path(name), verbose=verbose)
             install_as_root(stanza.encode(), sources, verbose=verbose)
-        except SystemExit:
-            step_end(label, "failed")
-            raise
+        except ITEM_ERRORS as error:
+            note_failed(label, f"{name} repository", error)
+            continue
         step_end(label, "added")
         note_installed(f"{name} repository")
         if name not in keep:
@@ -387,15 +388,23 @@ def sync_apt(
         ensure_sudo(dry_run=dry_run)
 
     if missing or repos_changed:
-        run(sudo(["apt-get", "update"]), dry_run=dry_run, verbose=verbose)
+        # One broken third-party repository fails the update as a whole, yet
+        # apt still installs from the lists it did fetch. Go on and let each
+        # package succeed or fail on its own.
+        try:
+            run(sudo(["apt-get", "update"]), dry_run=dry_run, verbose=verbose)
+        except ITEM_ERRORS as error:
+            note_failed(None, "apt-get update", error)
 
     # One apt-get call per package. Slower than a single batched call — apt
     # re-reads its state each time — but a batch is opaque: it either prints
     # nothing for a minute or fails without saying which package broke.
+    added = []
     for index, package in enumerate(missing, start=1):
         if dry_run:
             detail(f"[{index}/{len(missing)}] {package} ... would install")
             note_installed(package)
+            added.append(package)
             continue
 
         label = step_start(index, len(missing), package)
@@ -405,14 +414,16 @@ def sync_apt(
                 dry_run=False,
                 verbose=verbose,
             )
-        except SystemExit:
-            step_end(label, "failed")
-            raise
+        except ITEM_ERRORS as error:
+            note_failed(label, package, error)
+            continue
         step_end(label, f"done ({apt_version(package)})")
         note_installed(package)
+        added.append(package)
 
     # Only packages this tool installed are ever removed; anything the
     # distribution or the user brought in is left alone.
+    kept = []
     for index, package in enumerate(stale, start=1):
         if dry_run:
             detail(f"[{index}/{len(stale)}] {package} ... would remove")
@@ -426,9 +437,11 @@ def sync_apt(
                 dry_run=False,
                 verbose=verbose,
             )
-        except SystemExit:
-            step_end(label, "failed")
-            raise
+        except ITEM_ERRORS as error:
+            note_failed(label, package, error)
+            # Still ours and still installed: the next run tries again.
+            kept.append(package)
+            continue
         step_end(label, "removed")
         note_removed(package)
 
@@ -437,10 +450,10 @@ def sync_apt(
         detail(f"{current} already current")
     note_skip(current)
 
-    # Record only what we installed, so a package that predates this tool is
-    # never treated as ours on a later run.
-    owned = set(bucket["packages"]) | set(missing)
-    bucket["packages"] = sorted(owned & set(packages))
+    # Record only what we installed, so a package that predates this tool, or
+    # one whose install failed, is never treated as ours on a later run.
+    owned = set(bucket["packages"]) | set(added)
+    bucket["packages"] = sorted((owned & set(packages)) | set(kept))
 
     sync_apt_links(links, bucket, dry_run=dry_run)
 
@@ -526,14 +539,21 @@ def sync_snap(desired: list, bucket: dict, *, dry_run: bool, verbose: bool) -> N
             note_installed(name)
             continue
 
-        ensure_sudo(dry_run=False)
-        label = step_start(index, len(desired), name)
-        run(sudo(["snap", "install", name]), dry_run=False, verbose=verbose)
+        label = None
+        try:
+            # Before the step line: sudo may need to print a password prompt.
+            ensure_sudo(dry_run=False)
+            label = step_start(index, len(desired), name)
+            run(sudo(["snap", "install", name]), dry_run=False, verbose=verbose)
+        except ITEM_ERRORS as error:
+            note_failed(label, name, error)
+            continue
         step_end(label, f"installed {snap_version(name) or 'unknown'}")
         note_installed(name)
         if name not in owned:
             owned.append(name)
 
+    kept = []
     for name in stale:
         if not snap_version(name):
             owned.remove(name)
@@ -541,13 +561,22 @@ def sync_snap(desired: list, bucket: dict, *, dry_run: bool, verbose: bool) -> N
         if dry_run:
             detail(f"{name}: would remove")
         else:
-            ensure_sudo(dry_run=False)
-            run(sudo(["snap", "remove", name]), dry_run=False, verbose=verbose)
+            try:
+                ensure_sudo(dry_run=False)
+                run(sudo(["snap", "remove", name]), dry_run=False, verbose=verbose)
+            except ITEM_ERRORS as error:
+                note_failed(None, name, error)
+                # Still ours and still installed: the next run tries again.
+                kept.append(name)
+                continue
             detail(f"{name}: removed")
         note_removed(name)
         owned.remove(name)
 
-    bucket["snap"] = sorted(set(owned) & set(desired)) if not dry_run else owned
+    if not dry_run:
+        bucket["snap"] = sorted((set(owned) & set(desired)) | set(kept))
+    else:
+        bucket["snap"] = owned
 
 
 def deb_version(package: str) -> str:
@@ -593,8 +622,12 @@ def sync_deb(
         except UpstreamUnavailable as error:
             if present:
                 note_warning(f"{name}: {error}; keeping {present}")
-                continue
-            raise SystemExit(str(error)) from error
+            else:
+                note_failed(None, name, error)
+            continue
+        except ITEM_ERRORS as error:
+            note_failed(None, name, error)
+            continue
 
         # Some upstreams add a build suffix (4.1.1-312) the release tag lacks.
         # A package already at this version is only re-recorded if it is ours;
@@ -616,16 +649,22 @@ def sync_deb(
             note_installed(name)
             continue
 
-        ensure_sudo(dry_run=False)
-        label = step_start(index, len(desired), name)
-        with staging_area(STATE_PATH.parent) as staging:
-            payload = staging / asset
-            fetch(url, payload)
-            run(
-                sudo(["apt-get", "install", "-y", str(payload)]),
-                dry_run=False,
-                verbose=verbose,
-            )
+        label = None
+        try:
+            # Before the step line: sudo may need to print a password prompt.
+            ensure_sudo(dry_run=False)
+            label = step_start(index, len(desired), name)
+            with staging_area(STATE_PATH.parent) as staging:
+                payload = staging / asset
+                fetch(url, payload)
+                run(
+                    sudo(["apt-get", "install", "-y", str(payload)]),
+                    dry_run=False,
+                    verbose=verbose,
+                )
+        except ITEM_ERRORS as error:
+            note_failed(label, name, error)
+            continue
         step_end(label, f"installed {deb_version(package) or tag}")
         note_installed(name)
         owned[name] = {"version": tag, "package": package}
@@ -636,12 +675,17 @@ def sync_deb(
             if dry_run:
                 detail(f"{name}: would remove")
             else:
-                ensure_sudo(dry_run=False)
-                run(
-                    sudo(["apt-get", "remove", "-y", package]),
-                    dry_run=False,
-                    verbose=verbose,
-                )
+                try:
+                    ensure_sudo(dry_run=False)
+                    run(
+                        sudo(["apt-get", "remove", "-y", package]),
+                        dry_run=False,
+                        verbose=verbose,
+                    )
+                except ITEM_ERRORS as error:
+                    # Left in state, so the next run tries the removal again.
+                    note_failed(None, name, error)
+                    continue
                 detail(f"{name}: removed")
             note_removed(name)
         owned.pop(name)
@@ -674,21 +718,31 @@ def sync_script(desired: dict, bucket: dict, *, dry_run: bool, verbose: bool) ->
             detail(f"{name}: would run {spec['url']}")
             note_installed(name)
         else:
-            ensure_sudo(dry_run=False)
-            label = step_start(index, len(desired), name)
-            with staging_area(STATE_PATH.parent) as staging:
-                installer = staging / "install.sh"
-                fetch(spec["url"], installer)
-                installer.chmod(0o755)
-                run(sudo([str(installer)]), dry_run=False, verbose=verbose)
+            label = None
+            try:
+                # Before the step line: sudo may need to print a password prompt.
+                ensure_sudo(dry_run=False)
+                label = step_start(index, len(desired), name)
+                with staging_area(STATE_PATH.parent) as staging:
+                    installer = staging / "install.sh"
+                    fetch(spec["url"], installer)
+                    installer.chmod(0o755)
+                    run(sudo([str(installer)]), dry_run=False, verbose=verbose)
+            except ITEM_ERRORS as error:
+                note_failed(label, name, error)
+                continue
             step_end(label, "installed")
             note_installed(name)
 
         owned[name] = {"probe": probe}
 
-        for command in spec.get("post") or []:
-            rendered = [part.format(user=username()) for part in command]
-            run(rendered, dry_run=dry_run, verbose=verbose)
+        try:
+            for command in spec.get("post") or []:
+                rendered = [part.format(user=username()) for part in command]
+                run(rendered, dry_run=dry_run, verbose=verbose)
+        except ITEM_ERRORS as error:
+            # The install itself stands; only the re-applied settings failed.
+            note_failed(None, name, error)
 
     for name in stale:
         # A vendor installer carries no uninstall, and guessing at one would
@@ -771,8 +825,11 @@ def github_latest_tag(repo: str) -> str:
                 "set GITHUB_TOKEN to raise the ceiling"
             ) from error
         raise SystemExit(f"GitHub API returned {error.code} for {repo}") from error
-    except urllib.error.URLError as error:
-        raise UpstreamUnavailable(f"GitHub is unreachable: {error.reason}") from error
+    except (urllib.error.URLError, TimeoutError) as error:
+        # A read that stalls once the connection is up raises a bare
+        # TimeoutError instead of URLError; it is the same outage.
+        reason = getattr(error, "reason", "timed out")
+        raise UpstreamUnavailable(f"GitHub is unreachable: {reason}") from error
 
 
 def format_asset(template: str, tag: str) -> str:
@@ -873,9 +930,9 @@ def sync_github(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> 
             status = install_github(
                 name, spec, state, dry_run=dry_run, upgrade=upgrade
             )
-        except SystemExit:
-            step_end(label, "failed")
-            raise
+        except ITEM_ERRORS as error:
+            note_failed(label, name, error)
+            continue
         step_end(label, status)
         # install_github records a fresh entry only when it placed new files.
         after = state["github"].get(name)
@@ -903,9 +960,10 @@ def resolve_archive_version(spec: dict) -> str:
     if spec.get("version_url"):
         try:
             text = fetch_text(spec["version_url"])
-        except urllib.error.URLError as error:
+        except (urllib.error.URLError, TimeoutError) as error:
+            reason = getattr(error, "reason", "timed out")
             raise UpstreamUnavailable(
-                f"{spec['version_url']} is unreachable: {error.reason}"
+                f"{spec['version_url']} is unreachable: {reason}"
             ) from error
         # Some upstreams publish the version only inside a JSON release
         # manifest rather than as a bare line; `version_key` names its field.
@@ -1067,9 +1125,9 @@ def sync_archive(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) ->
             status = install_archive(
                 name, spec, state, dry_run=dry_run, upgrade=upgrade
             )
-        except SystemExit:
-            step_end(label, "failed")
-            raise
+        except ITEM_ERRORS as error:
+            note_failed(label, name, error)
+            continue
         step_end(label, status)
         # install_archive records a fresh entry only when it unpacked a release.
         after = state["archive"].get(name)
@@ -1121,7 +1179,8 @@ def npm_latest_version(package: str) -> str | None:
         return json.loads(fetch_text(f"https://registry.npmjs.org/{package}/latest"))[
             "version"
         ]
-    except (urllib.error.URLError, KeyError, json.JSONDecodeError):
+    except (OSError, KeyError, json.JSONDecodeError):
+        # URLError and a read's bare TimeoutError are both OSErrors.
         return None
 
 
@@ -1174,9 +1233,9 @@ def sync_npm(
                 dry_run=False,
                 verbose=verbose,
             )
-        except SystemExit:
-            step_end(label, "failed")
-            raise
+        except ITEM_ERRORS as error:
+            note_failed(label, package, error)
+            continue
 
         version = npm_installed_version(package) or "unknown"
         step_end(label, f"done ({version})")
@@ -1248,8 +1307,9 @@ def sync_go(
             env=env,
         )
         if result.returncode != 0:
-            step_end(label, "failed")
-            note_warning(f"{name}: go install failed")
+            note_failed(
+                label, name, SystemExit(f"go install exited with {result.returncode}")
+            )
             if not verbose and result.stderr:
                 for line in result.stderr.splitlines():
                     detail(f"    {line}")
@@ -1298,9 +1358,12 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
             if known:
                 step_end(label, f"kept {known['version']} (upstream unavailable)")
                 note_warning(f"{name}: {error}; keeping {known['version']}")
-                continue
-            step_end(label, "failed")
-            raise SystemExit(str(error)) from error
+            else:
+                note_failed(label, name, error)
+            continue
+        except ITEM_ERRORS as error:
+            note_failed(label, name, error)
+            continue
 
         asset = format_asset(spec["asset"], tag)
         url = f"https://github.com/{spec['repo']}/releases/download/{tag}/{asset}"
@@ -1315,20 +1378,24 @@ def sync_fonts(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) -> N
             note_installed(name)
             continue
 
-        with staging_area(FONT_DIR) as tmp:
-            payload = tmp / asset
-            fetch(url, payload)
-            staging = tmp / "staging"
-            extract_archive(payload, staging)
+        try:
+            with staging_area(FONT_DIR) as tmp:
+                payload = tmp / asset
+                fetch(url, payload)
+                staging = tmp / "staging"
+                extract_archive(payload, staging)
 
-            FONT_DIR.mkdir(parents=True, exist_ok=True)
-            if target.exists():
-                shutil.rmtree(target)
-            target.mkdir(parents=True)
-            # Nerd Fonts archives carry licences and READMEs beside the faces;
-            # fontconfig only cares about the faces.
-            for face in list(staging.rglob("*.ttf")) + list(staging.rglob("*.otf")):
-                shutil.copy2(face, target / face.name)
+                FONT_DIR.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    shutil.rmtree(target)
+                target.mkdir(parents=True)
+                # Nerd Fonts archives carry licences and READMEs beside the
+                # faces; fontconfig only cares about the faces.
+                for face in list(staging.rglob("*.ttf")) + list(staging.rglob("*.otf")):
+                    shutil.copy2(face, target / face.name)
+        except ITEM_ERRORS as error:
+            note_failed(label, name, error)
+            continue
 
         state["fonts"][name] = {"version": tag, "dir": str(target)}
         step_end(label, f"done ({tag})")
@@ -1682,89 +1749,94 @@ def main() -> None:
     state = load_state()
     held = [] if want_gui else set_aside(state, common, gui_section)
 
-    # A section that aborts — an unreachable upstream, a failed apt — must not
-    # throw away the record of what the earlier sections already installed, or
-    # the next run would treat those as foreign and refuse to manage them.
-    try:
-        if wanted("apt"):
-            sync_apt(
-                merge_apt(common, gui),
-                state["apt"],
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-            )
-        if wanted("github"):
-            sync_github(
-                merge(common, gui, "github", {}),
-                state,
-                dry_run=args.dry_run,
-                upgrade=args.upgrade,
-            )
-        if wanted("archive"):
-            sync_archive(
-                merge(common, gui, "archive", {}),
-                state,
-                dry_run=args.dry_run,
-                upgrade=args.upgrade,
-            )
-        if wanted("npm"):
-            sync_npm(
-                merge(common, gui, "npm", []),
-                state,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-                upgrade=args.upgrade,
-            )
-        if wanted("go"):
-            sync_go(
-                merge(common, gui, "go", {}),
-                state,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-                upgrade=args.upgrade,
-            )
-        if wanted("fonts"):
-            sync_fonts(
-                merge(common, gui, "fonts", {}),
-                state,
-                dry_run=args.dry_run,
-                upgrade=args.upgrade,
-            )
-        if wanted("files"):
-            sync_files(
-                merge(common, gui, "files", {}),
-                merge(common, gui, "seeds", {}),
-                merge(common, gui, "lines", {}),
-                state,
-                dry_run=args.dry_run,
-            )
-        if wanted("shell"):
-            sync_shell(merge(common, gui, "shell", {}), dry_run=args.dry_run)
+    steps = [
+        ("apt", lambda: sync_apt(
+            merge_apt(common, gui),
+            state["apt"],
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )),
+        ("github", lambda: sync_github(
+            merge(common, gui, "github", {}),
+            state,
+            dry_run=args.dry_run,
+            upgrade=args.upgrade,
+        )),
+        ("archive", lambda: sync_archive(
+            merge(common, gui, "archive", {}),
+            state,
+            dry_run=args.dry_run,
+            upgrade=args.upgrade,
+        )),
+        ("npm", lambda: sync_npm(
+            merge(common, gui, "npm", []),
+            state,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            upgrade=args.upgrade,
+        )),
+        ("go", lambda: sync_go(
+            merge(common, gui, "go", {}),
+            state,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            upgrade=args.upgrade,
+        )),
+        ("fonts", lambda: sync_fonts(
+            merge(common, gui, "fonts", {}),
+            state,
+            dry_run=args.dry_run,
+            upgrade=args.upgrade,
+        )),
+        ("files", lambda: sync_files(
+            merge(common, gui, "files", {}),
+            merge(common, gui, "seeds", {}),
+            merge(common, gui, "lines", {}),
+            state,
+            dry_run=args.dry_run,
+        )),
+        ("shell", lambda: sync_shell(
+            merge(common, gui, "shell", {}), dry_run=args.dry_run
+        )),
         # The system-wide desktop sources come last: everything under $HOME is
         # in place even if a snap store or a vendor's server is down, and a
         # vendor installer finds the curl and CA bundle apt has just ensured.
-        if wanted("snap"):
-            sync_snap(
-                merge(common, gui, "snap", []),
-                state,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-            )
-        if wanted("deb"):
-            sync_deb(
-                merge(common, gui, "deb", {}),
-                state,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-                upgrade=args.upgrade,
-            )
-        if wanted("script"):
-            sync_script(
-                merge(common, gui, "script", {}),
-                state,
-                dry_run=args.dry_run,
-                verbose=args.verbose,
-            )
+        ("snap", lambda: sync_snap(
+            merge(common, gui, "snap", []),
+            state,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )),
+        ("deb", lambda: sync_deb(
+            merge(common, gui, "deb", {}),
+            state,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            upgrade=args.upgrade,
+        )),
+        ("script", lambda: sync_script(
+            merge(common, gui, "script", {}),
+            state,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+        )),
+    ]
+
+    # A section that aborts must not throw away the record of what the earlier
+    # sections already installed, or the next run would treat those as foreign
+    # and refuse to manage them.
+    try:
+        for section, sync in steps:
+            if not wanted(section):
+                continue
+            try:
+                sync()
+            except ITEM_ERRORS as error:
+                # Items fail one at a time inside each section. This catches
+                # what a section raises outside its items — sudo with no
+                # terminal to ask on, a mistake in config.yaml — and costs
+                # only that section.
+                note_failed(None, f"{section} section", error)
     finally:
         put_back(held)
         state["gui"] = want_gui
@@ -1775,15 +1847,20 @@ def main() -> None:
         changed_verb, removed_verb = "would change", "would be removed"
     else:
         changed_verb, removed_verb = "changed", "removed"
-    changed, current, gone, problems = counts()
+    changed, current, gone, problems, failures = counts()
     log(
         f"Done. {changed} {changed_verb}, {current} already current, "
-        f"{gone} {removed_verb}, {problems} warning(s)."
+        f"{gone} {removed_verb}, {problems} warning(s), {failures} failed."
     )
+    # Repeated at the end: the error lines are long gone off the screen of a
+    # run that goes on through a dozen more sections.
+    if host.failed:
+        log(f"Failed ({len(host.failed)}):")
+        for name, reason in host.failed:
+            detail(f"{name}: {reason}")
     if host.broken:
-        # Repeated at the end: the error lines are long gone off the screen of
-        # a run that goes on through a dozen more sections.
         log(f"Broken after install: {', '.join(host.broken)}")
+    if host.failed or host.broken:
         sys.exit(1)
 
 

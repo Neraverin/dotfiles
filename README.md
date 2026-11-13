@@ -39,7 +39,11 @@ without sudo, which is not managed here: `sudo usermod -aG docker $USER`, then l
 
 Version lookups use the anonymous GitHub API, which allows 60 calls an hour per address. Set
 `GITHUB_TOKEN` if several hosts share one address; without it a rate-limited run keeps the
-installed version and warns, and only fails outright when the tool is not installed yet.
+installed version and warns, and fails only that tool when it is not installed yet.
+
+A failing item — a command that exits non-zero, a download that times out — never stops the
+run. It is marked `failed` on its line, everything after it is still installed or upgraded,
+and the closing summary lists every failed item with its reason; the run then exits 1.
 
 ## Bootstrap
 
