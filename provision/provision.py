@@ -1152,7 +1152,11 @@ def sync_archive(desired: dict, state: dict, *, dry_run: bool, upgrade: bool) ->
 
 
 def npm_installed_version(package: str) -> str | None:
-    manifest = NPM_PREFIX / "lib/node_modules" / package / "package.json"
+    return npm_version_in(NPM_PREFIX / "lib/node_modules" / package)
+
+
+def npm_version_in(directory: Path) -> str | None:
+    manifest = directory / "package.json"
     if not manifest.exists():
         return None
     try:
@@ -1172,6 +1176,58 @@ def npm_bin_links(package: str) -> list[Path]:
         # A bare string is linked under the package name, minus any scope.
         bins = {package.rsplit("/", 1)[-1]: bins}
     return [BIN_DIR / name for name in bins]
+
+
+def npm_links_resolve(package: str) -> bool:
+    # exists() follows the link, so one left pointing at nothing counts as missing.
+    return all(link.exists() for link in npm_bin_links(package))
+
+
+def npm_set_aside(path: Path) -> Path | None:
+    """The copy of `path` an npm install moved out of its way, if still there.
+
+    npm renames a package's directory and each of its command links to
+    `.<name>-<8 chars>` before unpacking the replacement, deletes them once the
+    new release is linked, and renames them back if the install fails. Killed
+    in between -- Ctrl+C on a download that has stalled -- it does neither.
+    """
+    pattern = re.compile(rf"\.{re.escape(path.name)}-[A-Za-z0-9]{{8}}")
+    try:
+        found = [entry for entry in path.parent.iterdir() if pattern.fullmatch(entry.name)]
+    except FileNotFoundError:
+        return None
+    return found[0] if len(found) == 1 else None
+
+
+def npm_finish_rollback(package: str, *, dry_run: bool) -> str | None:
+    """Put back the release an interrupted npm install set aside.
+
+    What such an install leaves behind is the new package.json without its
+    payload or its command links, which reads as installed at the new version
+    and so would be reported current forever. The previous release is intact
+    in the set-aside copy. Returns its version, or None when there is nothing
+    to undo.
+    """
+    target = NPM_PREFIX / "lib/node_modules" / package
+    if (target / "package.json").exists() and npm_links_resolve(package):
+        return None
+    previous = npm_set_aside(target)
+    if previous is None:
+        return None
+    version = npm_version_in(previous) or "unknown"
+    if dry_run:
+        detail(f"{package}: would restore {version}, set aside by an interrupted npm install")
+        return version
+    shutil.rmtree(target, ignore_errors=True)
+    previous.rename(target)
+    # The links the previous release declares, which npm moved aside with it.
+    for link in npm_bin_links(package):
+        aside = npm_set_aside(link)
+        if aside is not None:
+            link.unlink(missing_ok=True)
+            aside.rename(link)
+    detail(f"{package}: restored {version}, set aside by an interrupted npm install")
+    return version
 
 
 def npm_latest_version(package: str) -> str | None:
@@ -1197,7 +1253,18 @@ def sync_npm(
         return
 
     for index, package in enumerate(desired, start=1):
-        current = npm_installed_version(package)
+        try:
+            restored = npm_finish_rollback(package, dry_run=dry_run)
+        except ITEM_ERRORS as error:
+            note_failed(None, package, error)
+            continue
+        current = restored or npm_installed_version(package)
+        if current and not restored and not npm_links_resolve(package):
+            # A version on disk is only an install if its commands are there;
+            # with no earlier release to go back to, reinstall it.
+            action = "would reinstall" if dry_run else "reinstalling"
+            detail(f"{package}: {current} is missing its commands, {action}")
+            current = None
         label = step_start(index, len(desired), package)
 
         if current and not upgrade:
