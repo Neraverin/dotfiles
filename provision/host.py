@@ -42,8 +42,19 @@ installed: list[str] = []
 removed: list[str] = []
 warnings: list[str] = []
 broken: list[str] = []
+# (name, reason) for every item that could not be installed, upgraded or
+# removed. The run goes on past each one and lists them all at the end.
+failed: list[tuple[str, str]] = []
 skipped = 0
 step_open = False
+
+# What one item's failure can raise. The install paths and run() raise
+# SystemExit with a message; the network raises URLError, or a bare
+# TimeoutError when a read stalls after the connection is up; a corrupt payload
+# raises tarfile or zipfile errors. Anything short of Ctrl-C costs that item
+# only: one registry timing out is no reason to leave the other forty tools
+# un-upgraded.
+ITEM_ERRORS = (SystemExit, Exception)
 
 
 def note_installed(name: str) -> None:
@@ -54,9 +65,9 @@ def note_removed(name: str) -> None:
     removed.append(name)
 
 
-def counts() -> tuple[int, int, int, int]:
-    """(changed, already current, removed, warnings) for the closing summary."""
-    return len(installed), skipped, len(removed), len(warnings)
+def counts() -> tuple[int, int, int, int, int]:
+    """(changed, already current, removed, warnings, failed) for the summary."""
+    return len(installed), skipped, len(removed), len(warnings), len(failed)
 
 
 # --------------------------------------------------------------------------- io
@@ -125,6 +136,36 @@ def break_step_line() -> None:
 def note_skip(count: int = 1) -> None:
     global skipped
     skipped += count
+
+
+def failure_reason(error: BaseException) -> str:
+    """Why an item failed, first line foremost, from whatever it raised."""
+    if isinstance(error, SystemExit):
+        if isinstance(error.code, str):
+            return error.code
+        return f"exited with {error.code}"
+    if isinstance(error, urllib.error.URLError):
+        return f"network error: {error.reason}"
+    if isinstance(error, TimeoutError):
+        return "network timeout"
+    return f"{type(error).__name__}: {error}"
+
+
+def note_failed(label: str | None, name: str, error: BaseException) -> None:
+    """Close an item's line as failed and record it; the caller moves on.
+
+    `label` is None for a failure outside any step line — a whole section, or
+    an item that failed before its line was opened.
+    """
+    lines = failure_reason(error).splitlines() or ["unknown error"]
+    if label is None:
+        break_step_line()
+        print(f"  {name} ... failed: {lines[0]}", flush=True)
+    else:
+        step_end(label, f"failed: {lines[0]}")
+    for line in lines[1:]:
+        detail(f"    {line}")
+    failed.append((name, lines[0]))
 
 
 # ------------------------------------------------------------------ smoke tests
@@ -213,18 +254,22 @@ def run(cmd: list[str], *, dry_run: bool, verbose: bool, check: bool = True) -> 
         # A child writes straight to fd 1; anything still sitting in Python's
         # buffer would surface after it and land out of order.
         sys.stdout.flush()
-        return subprocess.run(cmd, check=check, env=child_env()).returncode
+        returncode = subprocess.run(cmd, env=child_env()).returncode
+    else:
+        result = subprocess.run(cmd, capture_output=True, text=True, env=child_env())
+        returncode = result.returncode
+        if returncode != 0 and check:
+            break_step_line()
+            detail(f"command failed: {' '.join(cmd)}")
+            for line in (result.stdout + result.stderr).splitlines():
+                detail(f"    {line}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True, env=child_env())
+    if returncode != 0 and check:
+        # The message becomes the item's reason in the closing summary, where
+        # the output above has long scrolled away.
+        raise SystemExit(f"{' '.join(cmd)} exited with {returncode}")
 
-    if result.returncode != 0 and check:
-        break_step_line()
-        detail(f"command failed: {' '.join(cmd)}")
-        for line in (result.stdout + result.stderr).splitlines():
-            detail(f"    {line}")
-        raise SystemExit(1)
-
-    return result.returncode
+    return returncode
 
 
 def sudo(cmd: list[str]) -> list[str]:
