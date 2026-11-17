@@ -243,20 +243,32 @@ def child_env() -> dict:
     return env
 
 
-def run(cmd: list[str], *, dry_run: bool, verbose: bool, check: bool = True) -> int:
-    """Run a command, hiding its output unless it fails or --verbose is set."""
+def run(
+    cmd: list[str],
+    *,
+    dry_run: bool,
+    verbose: bool,
+    check: bool = True,
+    env: dict | None = None,
+) -> int:
+    """Run a command, hiding its output unless it fails or --verbose is set.
+
+    `env` adds variables on top of child_env().
+    """
     if dry_run:
         detail(f"would run: {' '.join(cmd)}")
         return 0
+
+    environment = {**child_env(), **(env or {})}
 
     if verbose:
         break_step_line()
         # A child writes straight to fd 1; anything still sitting in Python's
         # buffer would surface after it and land out of order.
         sys.stdout.flush()
-        returncode = subprocess.run(cmd, env=child_env()).returncode
+        returncode = subprocess.run(cmd, env=environment).returncode
     else:
-        result = subprocess.run(cmd, capture_output=True, text=True, env=child_env())
+        result = subprocess.run(cmd, capture_output=True, text=True, env=environment)
         returncode = result.returncode
         if returncode != 0 and check:
             break_step_line()
@@ -434,6 +446,7 @@ EMPTY_STATE = {
     "github": {},
     "archive": {},
     "npm": {},
+    "pipx": {},
     "go": {},
     "fonts": {},
     "files": [],

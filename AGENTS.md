@@ -8,7 +8,7 @@ Personal dotfiles for Linux/WSL machines, provisioned with the distribution's ow
 | Path | What it is |
 | --- | --- |
 | `provision/host.py` | How the repository talks to the host: sudo handling, step lines, fetch/staging, the run counters and the state file. |
-| `provision/provision.py` | The whole tool: apt (packages and third-party repositories), GitHub releases, tarballs, npm, `go install`, fonts, dotfiles, the bash snippet, and on desktops snaps, vendor `.deb`s and vendor installers, driven by `config.yaml`. |
+| `provision/provision.py` | The whole tool: apt (packages and third-party repositories), GitHub releases, tarballs, npm, pipx, `go install`, fonts, dotfiles, the bash snippet, and on desktops snaps, vendor `.deb`s and vendor installers, driven by `config.yaml`. |
 | `apply.sh` | One-line wrapper: execs `provision/provision.py` with the arguments it was given. |
 | `provision/config.yaml` | Full declaration of every host. `common` everywhere, `gui` merged on top on graphical hosts, detected or forced with `--gui` / `--no-gui`. |
 | `tailscale-up.sh` | Joins the Headscale tailnet (`TAILSCALE_LOGIN_SERVER` overrides the server). |
@@ -30,8 +30,8 @@ python3 -m py_compile provision/*.py          # any Python edit
 
 `--dry-run` resolves every upstream version and prints the URLs it would fetch, so a broken
 asset template shows up without downloading anything. `--only <section>` narrows a run to
-`apt`, `github`, `archive`, `npm`, `go`, `fonts`, `files`, `shell`, `snap`, `deb` or `script`;
-the last three only ever have entries under `gui`.
+`apt`, `github`, `archive`, `npm`, `pipx`, `go`, `fonts`, `files`, `shell`, `snap`, `deb` or
+`script`; the last three only ever have entries under `gui`.
 
 `./provision/provision.py` without `--dry-run` changes the live machine — and so does
 `./apply.sh`, which is only a wrapper around it. Run either only when asked. The same goes for `migrate-from-nix.sh`, which is destructive by design.
@@ -52,7 +52,7 @@ the last three only ever have entries under `gui`.
     starship).
   - `seeds` — copied once, then left writable and alone. For files the application rewrites
     itself (Codex, Claude). `lines` is the same idea for one key inside a foreign config.
-- Every executable a github, archive, npm or go entry installs is run once after the install
+- Every executable a github, archive, npm, pipx or go entry installs is run once after the install
   (`smoke_test()` in `host.py`), with `--version` unless the entry's `check:` says otherwise.
   When adding an entry, confirm the binary exits 0 with whatever `check:` resolves to; a GUI
   program that opens a window on any invocation gets `check: false`. A failed check is printed

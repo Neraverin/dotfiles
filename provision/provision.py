@@ -1330,6 +1330,130 @@ def sync_npm(
             del state["npm"][package]
 
 
+# -------------------------------------------------------------------------- pipx
+
+
+def pipx_env() -> dict:
+    # pipx would follow PIPX_BIN_DIR or XDG_BIN_HOME from the caller's shell;
+    # the smoke test looks in ~/.local/bin, so the links go there.
+    return {"PIPX_BIN_DIR": str(BIN_DIR)}
+
+
+def pipx_installed(pipx: str) -> dict[str, dict]:
+    """Every venv pipx manages: {name: {"version": ..., "apps": [...]}}."""
+    result = subprocess.run(
+        [pipx, "list", "--json"],
+        capture_output=True,
+        text=True,
+        env={**child_env(), **pipx_env()},
+    )
+    if not result.stdout.strip() and result.returncode == 0:
+        # With nothing installed pipx prints a remark instead of an empty list.
+        return {}
+    try:
+        venvs = json.loads(result.stdout)["venvs"]
+    except (KeyError, json.JSONDecodeError):
+        # A venv whose interpreter has gone makes `pipx list` exit 1, but the
+        # healthy ones are still listed; only output that is not JSON is fatal.
+        raise SystemExit(f"pipx list --json exited with {result.returncode}")
+    tools = {}
+    for name, venv in venvs.items():
+        package = venv["metadata"]["main_package"]
+        tools[name] = {"version": package["package_version"], "apps": package["apps"]}
+    return tools
+
+
+def pypi_latest_version(package: str) -> str | None:
+    try:
+        return json.loads(fetch_text(f"https://pypi.org/pypi/{package}/json"))["info"][
+            "version"
+        ]
+    except (OSError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def sync_pipx(
+    desired: dict, state: dict, *, dry_run: bool, verbose: bool, upgrade: bool
+) -> None:
+    if not desired and not state["pipx"]:
+        return
+
+    log("pipx")
+
+    pipx = shutil.which("pipx", path=child_env()["PATH"])
+    if not pipx and not dry_run:
+        warn("pipx is not on PATH; skipping the pipx section")
+        return
+    # A dry run on a fresh host comes before apt has installed pipx.
+    present = pipx_installed(pipx) if pipx else {}
+
+    for index, (name, spec) in enumerate(desired.items(), start=1):
+        # A bare key is the PyPI name; a mapping adds a `check:` to it.
+        check = (spec or {}).get("check")
+        current = present[name]["version"] if name in present else None
+        label = step_start(index, len(desired), name)
+
+        if current and not upgrade:
+            step_end(label, f"already at {current}")
+            note_skip()
+            state["pipx"][name] = current
+            continue
+
+        if dry_run:
+            latest = pypi_latest_version(name)
+            if current and latest == current:
+                step_end(label, f"already at {current}")
+                note_skip()
+            elif current:
+                step_end(label, f"would upgrade {current} → {latest or 'latest'}")
+                note_installed(name)
+            else:
+                step_end(label, f"would install {latest or 'latest'}")
+                note_installed(name)
+            continue
+
+        # No version lookup first: PyPI's JSON runs to megabytes for a project
+        # with many releases, and `pipx upgrade` asks the index anyway.
+        try:
+            run(
+                [pipx, "upgrade" if current else "install", name],
+                dry_run=False,
+                verbose=verbose,
+                env=pipx_env(),
+            )
+            after = pipx_installed(pipx).get(name)
+            if after is None:
+                raise SystemExit("pipx does not list it after the install")
+        except ITEM_ERRORS as error:
+            note_failed(label, name, error)
+            continue
+
+        version = after["version"]
+        state["pipx"][name] = version
+        if version == current:
+            step_end(label, f"already at {current}")
+            note_skip()
+            continue
+        step_end(label, f"done ({version})")
+        note_installed(name)
+        verify(name, [BIN_DIR / app for app in after["apps"]], check)
+
+    for name in [n for n in list(state["pipx"]) if n not in desired]:
+        if pipx:
+            run(
+                [pipx, "uninstall", name],
+                dry_run=dry_run,
+                verbose=verbose,
+                check=False,
+                env=pipx_env(),
+            )
+        if not dry_run:
+            detail(f"{name}: removed")
+        note_removed(name)
+        if not dry_run:
+            del state["pipx"][name]
+
+
 # ---------------------------------------------------------------------------- go
 
 
@@ -1706,7 +1830,9 @@ def set_aside(state: dict, common: dict, gui: dict) -> list:
     files = {str(expand(path)) for path in gui_only("files")}
     plan = [
         (state, key, gui_only(key))
-        for key in ("github", "archive", "npm", "go", "fonts", "snap", "deb", "script")
+        for key in (
+            "github", "archive", "npm", "pipx", "go", "fonts", "snap", "deb", "script"
+        )
     ] + [
         (state, "files", files),
         (state["apt"], "packages", gui_only("apt", "packages")),
@@ -1774,6 +1900,7 @@ def main() -> None:
             "github",
             "archive",
             "npm",
+            "pipx",
             "go",
             "fonts",
             "files",
@@ -1837,6 +1964,13 @@ def main() -> None:
         )),
         ("npm", lambda: sync_npm(
             merge(common, gui, "npm", []),
+            state,
+            dry_run=args.dry_run,
+            verbose=args.verbose,
+            upgrade=args.upgrade,
+        )),
+        ("pipx", lambda: sync_pipx(
+            merge(common, gui, "pipx", {}),
             state,
             dry_run=args.dry_run,
             verbose=args.verbose,
