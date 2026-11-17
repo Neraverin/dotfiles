@@ -10,6 +10,7 @@
 #   github   release assets: archives (`binaries:`) or raw executables (`binary:`)
 #   archive  arbitrary tarballs unpacked under ~/.local/opt/<name>
 #   npm      global npm packages under ~/.local
+#   pipx     Python command-line tools from PyPI, one venv each
 #   go       `go install` targets, built with the toolchain from `archive`
 #   fonts    font archives unpacked under ~/.local/share/fonts/<name>
 #   files    repository-owned dotfiles, rewritten on every run
@@ -20,11 +21,11 @@
 #   deb      a .deb from a GitHub release                   (gui only)
 #   script   a vendor installer, plus commands re-run after (gui only)
 #
-# Every executable github, archive, npm and go install is run once right after
-# it is installed or upgraded, with --version unless the entry says otherwise
-# in `check:` — a list of arguments, a map from binary name to such a list, or
-# false where any invocation would open a window. A tool that cannot start, or
-# exits non-zero, is reported as broken and the run exits 1.
+# Every executable github, archive, npm, pipx and go install is run once right
+# after it is installed or upgraded, with --version unless the entry says
+# otherwise in `check:` — a list of arguments, a map from binary name to such a
+# list, or false where any invocation would open a window. A tool that cannot
+# start, or exits non-zero, is reported as broken and the run exits 1.
 #
 # `common` is kept deliberately host-agnostic: nothing there may assume a
 # graphical session, a specific distribution, or a path outside $HOME.
@@ -69,6 +70,9 @@ common:
       - net-tools
       - nodejs
       - npm
+      # Installs the `pipx` section below. Debian 12's 1.1.0 keeps its venvs in
+      # ~/.local/pipx, later releases in ~/.local/share/pipx.
+      - pipx
       - poppler-utils
       - python3-yaml
       - shellcheck
@@ -171,6 +175,29 @@ common:
     # install.sh ran before, npm refuses to replace the ~/.local/bin/grok link
     # it left: delete that link first.
     - "@xai-official/grok"
+
+  # Python command-line tools from PyPI, each in a venv of its own and linked
+  # into ~/.local/bin. Debian 12 ships neither ruff nor pip-audit, and its mypy
+  # 1.0 and vulture 2.7 date from early 2023. A key is the PyPI name; a value
+  # may carry `check`.
+  #
+  # A tool sees only its own venv. mypy needs `--python-executable
+  # .venv/bin/python` to resolve a project's imports, and pip-audit without
+  # arguments audits pipx's venv rather than the project: give it `-r`.
+  #
+  # The venvs run on the host's python3. A distribution upgrade that replaces
+  # it leaves them all broken; `pipx reinstall-all` rebuilds them.
+  pipx:
+    mypy:
+      check:
+        # mypyc writes a setup.py into ./build and compiles whatever it was
+        # given; there is no harmless invocation to test it with.
+        mypyc: false
+        stubgen: [--help]
+        stubtest: [--help]
+    pip-audit:
+    ruff:
+    vulture:
 
   # Built from source with the Go toolchain above, into ~/.local/bin. A value
   # is the package, or a mapping with `package` and `check`.

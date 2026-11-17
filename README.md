@@ -1,8 +1,8 @@
 # dotfiles
 
 Machine configuration for Linux/WSL development machines, applied with the distribution's own
-tooling: apt packages, upstream release binaries, npm globals, dotfiles and a bash snippet, all
-declared in `provision/config.yaml`.
+tooling: apt packages, upstream release binaries, npm globals, Python tools through pipx,
+dotfiles and a bash snippet, all declared in `provision/config.yaml`.
 
 ## Apply
 
@@ -22,8 +22,8 @@ WSL always counts as headless. `--gui` / `--no-gui` override the detection. With
 section is only skipped: nothing it installed is ever removed by `--no-gui` or by a missed
 detection, only by deleting the entry from `config.yaml`.
 
-`--only <section>` limits the run to one of `apt`, `github`, `archive`, `npm`, `go`, `fonts`,
-`files`, `shell`, `snap`, `deb`, `script`. `--verbose` streams command output.
+`--only <section>` limits the run to one of `apt`, `github`, `archive`, `npm`, `pipx`, `go`,
+`fonts`, `files`, `shell`, `snap`, `deb`, `script`. `--verbose` streams command output.
 
 What it installed is recorded in `~/.local/state/dotfiles/state.json`. Removing an entry from
 `config.yaml` removes what that entry installed on the next run — and nothing else, so packages
