@@ -16,11 +16,11 @@ dotfiles and a bash snippet, all declared in `provision/config.yaml`.
 and can be called directly; either works from any directory.
 
 When the host has a desktop, the `gui` section is applied as well: DeaDBeeF, the Hack Nerd Font,
-wezterm-nightly, claude-desktop, telegram-desktop, happ and tailscale. A desktop is detected from
-`XDG_CURRENT_DESKTOP` or from installed desktop software (GNOME Shell, Xorg, a display manager);
-WSL always counts as headless. `--gui` / `--no-gui` override the detection. Without a desktop the
-section is only skipped: nothing it installed is ever removed by `--no-gui` or by a missed
-detection, only by deleting the entry from `config.yaml`.
+wezterm-nightly, claude-desktop, Google Chrome, telegram-desktop, happ and tailscale. A desktop
+is detected from `XDG_CURRENT_DESKTOP` or from installed desktop software (GNOME Shell, Xorg, a
+display manager); WSL always counts as headless. `--gui` / `--no-gui` override the detection.
+Without a desktop the section is only skipped: nothing it installed is ever removed by
+`--no-gui` or by a missed detection, only by deleting the entry from `config.yaml`.
 
 `--only <section>` limits the run to one of `apt`, `github`, `archive`, `npm`, `pipx`, `go`,
 `fonts`, `files`, `shell`, `snap`, `deb`, `script`. `--verbose` streams command output.
