@@ -278,8 +278,25 @@ gui:
           # update. It reads this file and skips its own registration.
           /etc/default/claude-desktop: |
             CLAUDE_DESKTOP_ADD_REPO="false"
+      chrome:
+        # Google's repository is the only source of Chrome; the distributions
+        # carry Chromium at most, and Ubuntu only as a snap. One suite serves
+        # every distribution. The URI is the one the package itself registers.
+        key: https://dl.google.com/linux/linux_signing_key.pub
+        fingerprint: EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796
+        uri: https://dl.google.com/linux/chrome-stable/deb
+        suites: stable
+        files:
+          # Chrome's postinst writes its own google-chrome.sources, signed by a
+          # keyring of its own; same URI, different Signed-By, and apt-get
+          # update fails on the conflict. It skips that while this file says the
+          # repository was added already. The entry is not named google-chrome
+          # for the same reason: postinst rewrites that file whenever it exists.
+          /etc/default/google-chrome: |
+            repo_add_once="false"
     packages:
       - claude-desktop
+      - google-chrome-stable
       - wezterm-nightly
 
   archive:
