@@ -91,6 +91,14 @@ common:
   # `asset` accepts {version} (the tag verbatim) and {version_strip} (without a
   # leading v) because upstreams disagree about which one they put in filenames.
   github:
+    gh:
+      # Debian 12 ships 2.23 and Ubuntu 26.04 2.46, both years behind the
+      # monthly releases. The release tarball carries one static binary, nested
+      # under gh_<version>_linux_amd64/bin; its bash completion, which the
+      # distribution package would install, comes from `shell.init` below.
+      repo: cli/cli
+      asset: gh_{version_strip}_linux_amd64.tar.gz
+      binaries: [gh]
     golangci-lint:
       repo: golangci/golangci-lint
       asset: golangci-lint-{version_strip}-linux-amd64.tar.gz
@@ -235,6 +243,7 @@ common:
       ls: ls --color=auto
     init:
       - direnv hook bash
+      - gh completion -s bash
       - starship init bash
       - zoxide init bash
     # Raw lines, for what an `eval "$(...)"` cannot express. fzf only grew
