@@ -10,6 +10,7 @@ Personal dotfiles for Linux/WSL machines, provisioned with the distribution's ow
 | `provision/host.py` | How the repository talks to the host: sudo handling, step lines, fetch/staging, the run counters and the state file. |
 | `provision/provision.py` | The whole tool: apt (packages and third-party repositories), GitHub releases, tarballs, npm, pipx, `go install`, fonts, dotfiles, the bash snippet, and on desktops snaps, vendor `.deb`s and vendor installers, driven by `config.yaml`. |
 | `apply.sh` | One-line wrapper: execs `provision/provision.py` with the arguments it was given. |
+| `upgrade.sh` | One-line wrapper: execs `apply.sh --upgrade` with the arguments it was given. |
 | `provision/config.yaml` | Full declaration of every host. `common` everywhere, `gui` merged on top on graphical hosts, detected or forced with `--gui` / `--no-gui`. |
 | `tailscale-up.sh` | Joins the Headscale tailnet (`TAILSCALE_LOGIN_SERVER` overrides the server). |
 | `migrate-from-nix.sh` | For hosts still on the old Nix/home-manager setup: deactivates it, restores the dotfiles it displaced, runs `provision.py`, and with `--purge-nix` deletes Nix itself. |
@@ -34,7 +35,7 @@ asset template shows up without downloading anything. `--only <section>` narrows
 `script`; the last three only ever have entries under `gui`.
 
 `./provision/provision.py` without `--dry-run` changes the live machine — and so does
-`./apply.sh`, which is only a wrapper around it. Run either only when asked. The same goes for `migrate-from-nix.sh`, which is destructive by design.
+`./apply.sh` and `./upgrade.sh`, which are only wrappers around it. Run any of them only when asked. The same goes for `migrate-from-nix.sh`, which is destructive by design.
 
 ## Conventions
 

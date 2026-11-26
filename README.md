@@ -9,11 +9,12 @@ dotfiles and a bash snippet, all declared in `provision/config.yaml`.
 ```sh
 ./apply.sh --dry-run     # report what would change
 ./apply.sh                  # apply
-./apply.sh --upgrade     # also re-check upstream versions
+./upgrade.sh             # also re-check upstream versions
 ```
 
 `apply.sh` is a one-line wrapper around `provision/provision.py`, which takes the same flags
-and can be called directly; either works from any directory.
+and can be called directly; either works from any directory. `upgrade.sh` is `apply.sh --upgrade`
+and passes any further flags through.
 
 When the host has a desktop, the `gui` section is applied as well: DeaDBeeF, the Hack Nerd Font,
 wezterm-nightly, claude-desktop, Google Chrome, telegram-desktop, happ and tailscale. A desktop
