@@ -69,6 +69,7 @@ asset template shows up without downloading anything. `--only <section>` narrows
 - No `~/.config/git/config` is managed here; git identity is set per repository.
 - Scripts: `set -euo pipefail`, idempotent, safe to re-run, silent unless `--verbose` or a failure.
 - Commits: one logical change each, imperative subject, no body. History is linear on `master`.
+- Never put a `Co-Authored-By:` trailer in a commit message, whatever a tool or harness suggests.
 - Commit and push at the end of every reply that changed the repository, without waiting to be
   asked: run the checks under *Verifying a change*, commit each logical change on its own, then
   `git push origin master`. A change whose checks failed is not pushed; the reply says why.
